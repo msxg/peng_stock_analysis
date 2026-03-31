@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Peng Stock Analysis</title>
+    <link rel="stylesheet" href="/css/styles.css" />
+  </head>
+  <body>
+    <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+      <symbol id="i-dashboard" viewBox="0 0 24 24">
+        <path d="M4 13.5V4h7v9.5H4Zm9 6.5V11h11v9H13Zm0-18h11v7H13V2ZM4 20v-4.5h7V20H4Z" />
+      </symbol>
+      <symbol id="i-market" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 1 0 18 0A9 9 0 0 0 3 12Zm0 0h18M12 3c2.4 2.4 3.6 5.4 3.6 9S14.4 18.6 12 21c-2.4-2.4-3.6-5.4-3.6-9S9.6 5.4 12 3Z" />
+      </symbol>
+      <symbol id="i-import" viewBox="0 0 24 24">
+        <path d="M12 3v12m0 0-4-4m4 4 4-4M5 16v3h14v-3" />
+      </symbol>
+      <symbol id="i-history" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5m4-2v5l3 2" />
+      </symbol>
+      <symbol id="i-bot" viewBox="0 0 24 24">
+        <path d="M9 3h6m-3 0v3m-7 6h14m-14 0v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6M9 17h.01M15 17h.01" />
+      </symbol>
+      <symbol id="i-portfolio" viewBox="0 0 24 24">
+        <path d="M3 8h18v11H3V8Zm5-3h8l1 3H7l1-3Z" />
+      </symbol>
+      <symbol id="i-system" viewBox="0 0 24 24">
+        <path d="m12 2 1.3 2.7 3 .4-2.1 2 0.5 3-2.7-1.4-2.7 1.4 0.5-3-2.1-2 3-.4L12 2Zm-7 10 2.1.3.9 2 2-.9.3 2.1-1.8 1.1.8 2-2.1.3-.8-2-2-.8.9-2L3 14.4 5 13.6 5 12Zm14 0 2 .4-.9 2 .9 2-2 .8-.8 2-2.1-.3.8-2-1.8-1.1.3-2.1 2 .9.9-2Z" />
+      </symbol>
+      <symbol id="i-futures" viewBox="0 0 24 24">
+        <path d="M3 17h18M5 13l4-4 3 3 6-6M5 20h14M5 4v16M19 4v16" />
+      </symbol>
+      <symbol id="i-stock" viewBox="0 0 24 24">
+        <path d="M4 18h16M6 15l3-3 3 2 6-6M7 6h.01M11 6h.01M15 6h.01M19 6h.01" />
+      </symbol>
+      <symbol id="i-data" viewBox="0 0 24 24">
+        <path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 6c0 1.7 3.6 3 8 3s8-1.3 8-3m-16 6c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <path d="m21 21-4.2-4.2M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z" />
+      </symbol>
+      <symbol id="i-command" viewBox="0 0 24 24">
+        <path d="M6.5 6.5h.01m0 0A2.5 2.5 0 1 0 6.5 11h11A2.5 2.5 0 1 1 15 6.5v11A2.5 2.5 0 1 0 17.5 15H6.5A2.5 2.5 0 1 1 9 17.5v-11A2.5 2.5 0 1 0 6.5 9" />
+      </symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24">
+        <path d="M6 8a6 6 0 1 1 12 0v5l2 3H4l2-3V8Zm4 11a2 2 0 0 0 4 0" />
+      </symbol>
+      <symbol id="i-group-analysis" viewBox="0 0 24 24">
+        <path d="M4 19V5m0 14h16M8 15l3-3 2 2 5-5" />
+      </symbol>
+      <symbol id="i-group-strategy" viewBox="0 0 24 24">
+        <path d="M5 5h14v14H5V5Zm4 4h6m-6 3h6m-6 3h4" />
+      </symbol>
+      <symbol id="i-group-config" viewBox="0 0 24 24">
+        <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 4-2.1.7-.3 2.2 1.5 1.6-1.8 3-2-.8-1.8 1.3.1 2.2h-3.5l.1-2.2-1.8-1.3-2 .8-1.8-3L5.4 15l-.3-2.2L3 12l2.1-.7.3-2.2L3.9 7.5l1.8-3 2 .8L9.5 4l-.1-2h3.5l-.1 2 1.8 1.3 2-.8 1.8 3-1.5 1.6.3 2.2L21 12Z" />
+      </symbol>
+    </svg>
+
+    <div class="dashboard-shell">
+      <aside class="app-sidebar">
+        <div class="sidebar-brand">
+          <div class="brand-icon">PA</div>
+          <div>
+            <h1>Peng Admin</h1>
+            <p>股票分析平台</p>
+          </div>
+        </div>
+
+        <p class="sidebar-label">导航菜单</p>
+        <nav class="sidebar-nav" id="mainNav">
+          <section class="nav-group" data-group>
+            <button type="button" class="group-toggle">
+              <span class="group-title"><span class="group-icon"><svg class="icon"><use href="#i-group-analysis"></use></svg></span> 分析中心</span>
+              <span class="group-arrow">▾</span>
+            </button>
+            <div class="group-items">
+              <button class="active" data-tab="realtime"><span class="menu-icon"><svg class="icon"><use href="#i-dashboard"></use></svg></span> 实时仪表盘</button>
+              <button data-tab="market"><span class="menu-icon"><svg class="icon"><use href="#i-market"></use></svg></span> 市场复盘</button>
+              <button data-tab="import"><span class="menu-icon"><svg class="icon"><use href="#i-import"></use></svg></span> 智能导入</button>
+              <button data-tab="history"><span class="menu-icon"><svg class="icon"><use href="#i-history"></use></svg></span> 历史与回测</button>
+            </div>
+          </section>
+
+          <section class="nav-group" data-group>
+            <button type="button" class="group-toggle">
+              <span class="group-title"><span class="group-icon"><svg class="icon"><use href="#i-market"></use></svg></span> 行情中心</span>
+              <span class="group-arrow">▾</span>
+            </button>
+            <div class="group-items">
+              <button data-tab="futures"><span class="menu-icon"><svg class="icon"><use href="#i-futures"></use></svg></span> 期货监测</button>
+              <button data-tab="stock-monitor"><span class="menu-icon"><svg class="icon"><use href="#i-stock"></use></svg></span> 股票监测</button>
+            </div>
+          </section>
+
+          <section class="nav-group" data-group>
+            <button type="button" class="group-toggle">
+              <span class="group-title"><span class="group-icon"><svg class="icon"><use href="#i-group-strategy"></use></svg></span> 策略与执行</span>
+              <span class="group-arrow">▾</span>
+            </button>
+            <div class="group-items">
+              <button data-tab="agent"><span class="menu-icon"><svg class="icon"><use href="#i-bot"></use></svg></span> Agent 问股</button>
+              <button data-tab="portfolio"><span class="menu-icon"><svg class="icon"><use href="#i-portfolio"></use></svg></span> 持仓管理</button>
+            </div>
+          </section>
+
+          <section class="nav-group" data-group>
+            <button type="button" class="group-toggle">
+              <span class="group-title"><span class="group-icon"><svg class="icon"><use href="#i-group-config"></use></svg></span> 系统配置</span>
+              <span class="group-arrow">▾</span>
+            </button>
+            <div class="group-items">
+              <button data-tab="base-data"><span class="menu-icon"><svg class="icon"><use href="#i-data"></use></svg></span> 基础数据</button>
+              <button data-tab="system"><span class="menu-icon"><svg class="icon"><use href="#i-system"></use></svg></span> 系统设置</button>
+            </div>
+          </section>
+        </nav>
+
+        <div class="sidebar-foot">
+          <span id="healthStatus">服务状态检查中...</span>
+        </div>
+      </aside>
+
+      <div class="app-main">
+        <header class="top-toolbar">
+          <div class="toolbar-left">
+            <button class="toolbar-icon" type="button" aria-label="菜单">
+              <svg class="icon"><use href="#i-dashboard"></use></svg>
+            </button>
+            <div class="search-box">
+              <span><svg class="icon"><use href="#i-search"></use></svg></span>
+              <input id="commandInput" placeholder="输入命令或按 Cmd/Ctrl + K" />
+              <kbd>⌘K</kbd>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <button class="toolbar-icon" id="commandOpenBtn" type="button" aria-label="打开命令面板">
+              <svg class="icon"><use href="#i-command"></use></svg>
+            </button>
+            <button class="toolbar-icon" type="button" aria-label="通知">
+              <svg class="icon"><use href="#i-bell"></use></svg>
+            </button>
+            <div class="user-pill">管理员</div>
+          </div>
+        </header>
+
+        <main class="content-wrap">
+          <section class="tab-panel active" id="tab-realtime">
+            <div class="metrics ticker-cards" id="realtimeMetrics">
+              <div class="metric-card">
+                <span>股票</span>
+                <strong id="metricCode">-</strong>
+              </div>
+              <div class="metric-card">
+                <span>最新价</span>
+                <strong id="metricPrice">-</strong>
+              </div>
+              <div class="metric-card">
+                <span>涨跌幅</span>
+                <strong id="metricChange">-</strong>
+              </div>
+              <div class="metric-card">
+                <span>MA5 / MA10 / MA20</span>
+                <strong id="metricMa">-</strong>
+              </div>
+              <div class="metric-card">
+                <span>量比</span>
+                <strong id="metricVolumeRatio">-</strong>
+              </div>
+              <div class="metric-card">
+                <span>情绪评分</span>
+                <strong id="metricSentiment">-</strong>
+              </div>
+            </div>
+
+            <div class="grid two">
+              <article class="panel">
+                <div class="panel-head">
+                  <h2>单股实时分析</h2>
+                  <p class="muted">一句话结论 + 点位建议 + 检查清单</p>
+                </div>
+
+                <div class="inline-form">
+                  <input id="singleCodeInput" placeholder="输入股票代码，如 AAPL / 600519 / 00700" />
+                  <button class="btn btn-primary" id="runSingleBtn">立即分析</button>
+                </div>
+
+                <div class="inline-form" style="margin-top: 10px">
+                  <textarea id="batchCodesInput" placeholder="批量任务（逗号分隔），如 AAPL,600519,00700"></textarea>
+                  <button class="btn btn-secondary" id="runBatchBtn">批量异步任务</button>
+                </div>
+
+                <div class="banner hidden" id="realtimeMsg"></div>
+
+                <div class="task-wrap">
+                  <h3>任务队列</h3>
+                  <div id="taskList" class="list"></div>
+                </div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head">
+                  <h2>市场快照</h2>
+                  <p class="muted">按区域查看指数与风险温度</p>
+                </div>
+                <div class="inline-form compact">
+                  <select id="quickMarketRegion">
+                    <option value="both">A股 + 美股</option>
+                    <option value="cn">仅A股</option>
+                    <option value="us">仅美股</option>
+                  </select>
+                  <button class="btn btn-ghost" id="refreshQuickMarketBtn">刷新快照</button>
+                </div>
+                <div id="quickMarketView" class="summary-grid"></div>
+              </article>
+            </div>
+
+            <div class="grid three-chart">
+              <article class="panel chart-panel panel-lg">
+                <h3>收盘价与均线趋势</h3>
+                <div class="chart-wrap">
+                  <canvas id="priceChart" height="280"></canvas>
+                </div>
+              </article>
+              <article class="panel chart-panel">
+                <h3>成交量变化</h3>
+                <div class="chart-wrap">
+                  <canvas id="volumeChart" height="280"></canvas>
+                </div>
+              </article>
+              <article class="panel chart-panel">
+                <h3>筹码分布</h3>
+                <div class="chart-wrap">
+                  <canvas id="chipChart" height="280"></canvas>
+                </div>
+              </article>
+            </div>
+
+            <div class="grid three">
+              <article class="panel">
+                <h3>AI 决策仪表盘</h3>
+                <div id="dashboardSummary" class="headline">等待分析...</div>
+                <div class="kv-grid">
+                  <div><span>买入点</span><strong id="buyPrice">-</strong></div>
+                  <div><span>止损位</span><strong id="stopLoss">-</strong></div>
+                  <div><span>目标位</span><strong id="targetPrice">-</strong></div>
+                  <div><span>建议动作</span><strong id="recommendation">-</strong></div>
+                </div>
+                <h4>操作检查清单</h4>
+                <ul id="checklist" class="plain-list"></ul>
+              </article>
+
+              <article class="panel">
+                <h3>策略系统</h3>
+                <div class="kv-grid">
+                  <div><span>策略框架</span><strong id="strategySystem">-</strong></div>
+                  <div><span>策略模式</span><strong id="strategyMode">-</strong></div>
+                </div>
+                <ul id="strategyPlan" class="plain-list"></ul>
+                <p class="disclaimer" id="strategyDisclaimer">仅供参考，不构成投资建议。</p>
+              </article>
+
+              <article class="panel">
+                <h3>新闻舆情</h3>
+                <div id="newsList" class="list"></div>
+              </article>
+            </div>
+
+            <article class="panel" style="margin-top: 14px">
+              <h3>基本面结构化聚合（fundamental_context）</h3>
+              <div id="fundamentalGrid" class="fundamental-grid"></div>
+            </article>
+          </section>
+
+          <section class="tab-panel" id="tab-market">
+            <article class="panel">
+              <h2>大盘复盘</h2>
+              <div class="inline-form compact">
+                <select id="marketRegionSelect">
+                  <option value="both">cn + us</option>
+                  <option value="cn">cn</option>
+                  <option value="us">us</option>
+                </select>
+                <button class="btn btn-primary" id="loadMarketBtn">加载复盘</button>
+              </div>
+              <div class="grid two" id="marketReviewContainer"></div>
+            </article>
+          </section>
+
+          <section class="tab-panel" id="tab-futures">
+            <article class="panel futures-entry-panel">
+              <h2 class="futures-page-title">期货监测</h2>
+              <div class="futures-entry-actions">
+                <button class="btn btn-secondary" id="openFuturesCategoryModalBtn">分类管理</button>
+                <button class="btn btn-secondary" id="openFuturesSymbolModalBtn">品种管理</button>
+                <button class="btn btn-ghost" id="openFuturesConsoleModalBtn">监测控制台</button>
+              </div>
+            </article>
+
+            <div id="futuresMonitorContainer" class="futures-monitor-grid futures-monitor-root"></div>
+          </section>
+
+          <section class="tab-panel" id="tab-stock-monitor">
+            <article class="panel futures-entry-panel">
+              <h2 class="futures-page-title">股票监测</h2>
+              <div class="futures-entry-actions">
+                <button class="btn btn-secondary" id="openStockCategoryModalBtn">分类管理</button>
+                <button class="btn btn-secondary" id="openStockSymbolModalBtn">股票池管理</button>
+                <button class="btn btn-ghost" id="openStockConsoleModalBtn">监测控制台</button>
+              </div>
+            </article>
+
+            <div id="stockMonitorContainer" class="futures-monitor-grid futures-monitor-root"></div>
+          </section>
+
+          <section class="tab-panel" id="tab-import">
+            <div class="grid two">
+              <article class="panel">
+                <h2>智能导入</h2>
+                <p class="muted">支持图片 / CSV / Excel / 文本，输出置信度分层确认。</p>
+                <label>粘贴文本</label>
+                <textarea id="importTextInput" placeholder="示例：&#10;贵州茅台&#10;AAPL Apple&#10;00700 腾讯"></textarea>
+                <div class="inline-form compact" style="margin-top: 10px">
+                  <button class="btn btn-primary" id="parseTextBtn">解析文本</button>
+                  <button class="btn btn-secondary" id="useImportForAnalysisBtn">导入结果去分析</button>
+                </div>
+
+                <label style="margin-top: 12px">上传文件（CSV/Excel/图片）</label>
+                <input id="importFileInput" type="file" accept=".csv,.txt,.xls,.xlsx,.png,.jpg,.jpeg,.webp" />
+                <div class="inline-form compact" style="margin-top: 10px">
+                  <button class="btn btn-secondary" id="parseFileBtn">解析文件</button>
+                  <button class="btn btn-ghost" id="extractImageBtn">图片专用提取</button>
+                </div>
+                <div class="banner hidden" id="importMsg"></div>
+              </article>
+
+              <article class="panel">
+                <h3>解析结果</h3>
+                <table class="table" id="importTable">
+                  <thead>
+                    <tr>
+                      <th>代码</th>
+                      <th>名称</th>
+                      <th>置信度</th>
+                      <th>等级</th>
+                      <th>来源</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="tab-history">
+            <div class="grid two">
+              <article class="panel">
+                <h2>历史记录（批量管理）</h2>
+                <div class="inline-form compact">
+                  <button class="btn btn-secondary" id="refreshHistoryBtn">刷新</button>
+                  <button class="btn btn-ghost" id="selectAllHistoryBtn">全选/反选</button>
+                  <button class="btn btn-danger" id="deleteHistoryBtn">批量删除</button>
+                </div>
+                <div id="historyList" class="list"></div>
+              </article>
+              <article class="panel">
+                <h3>历史详情</h3>
+                <div id="historyDetailView" class="markdown-view">请选择左侧记录</div>
+              </article>
+            </div>
+
+            <div class="grid two" style="margin-top: 14px">
+              <article class="panel">
+                <h2>AI 回测验证</h2>
+                <div class="inline-form compact">
+                  <input id="backtestDaysInput" type="number" min="1" max="60" value="5" />
+                  <input id="backtestStockInput" placeholder="可选：仅某只股票，如 AAPL" />
+                  <button class="btn btn-primary" id="runBacktestBtn">执行回测</button>
+                  <button class="btn btn-secondary" id="refreshBacktestBtn">刷新结果</button>
+                </div>
+                <div id="backtestSummary" class="summary-grid"></div>
+              </article>
+
+              <article class="panel">
+                <h3>分股票表现</h3>
+                <table class="table" id="backtestTable">
+                  <thead>
+                    <tr>
+                      <th>代码</th>
+                      <th>样本</th>
+                      <th>方向胜率</th>
+                      <th>止盈命中</th>
+                      <th>止损命中</th>
+                      <th>平均收益</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="tab-agent">
+            <div class="grid two">
+              <article class="panel">
+                <h2>Agent 问股（11策略）</h2>
+                <textarea id="agentInput" placeholder="例如：AAPL 当前趋势如何？结合均线金叉和波浪策略给建议"></textarea>
+                <div class="inline-form compact" style="margin-top: 10px">
+                  <button class="btn btn-primary" id="sendAgentBtn">发送</button>
+                  <button class="btn btn-secondary" id="loadStrategiesBtn">刷新策略库</button>
+                  <button class="btn btn-ghost" id="loadSessionsBtn">刷新会话</button>
+                </div>
+                <div id="strategyTags" class="tag-wrap"></div>
+                <div id="agentReplyView" class="markdown-view">暂无回复</div>
+              </article>
+
+              <article class="panel">
+                <h3>历史会话</h3>
+                <div id="agentSessionList" class="list"></div>
+                <h3 style="margin-top: 14px">会话消息</h3>
+                <div id="agentMessageList" class="list"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="tab-portfolio">
+            <div class="grid three">
+              <article class="panel">
+                <h2>账户与交易</h2>
+                <label>新账户名称</label>
+                <input id="accountNameInput" placeholder="主账户" />
+                <button class="btn btn-primary" id="createAccountBtn" style="margin-top: 8px">创建账户</button>
+                <label style="margin-top: 12px">交易 JSON</label>
+                <textarea id="tradeJsonInput" placeholder='{"accountId":1,"stockCode":"AAPL","side":"buy","quantity":10,"price":100,"tradeDate":"2026-03-17"}'></textarea>
+                <button class="btn btn-secondary" id="createTradeBtn" style="margin-top: 8px">提交交易</button>
+                <div class="banner hidden" id="portfolioMsg"></div>
+              </article>
+
+              <article class="panel">
+                <h3>账户列表</h3>
+                <div class="inline-form compact">
+                  <button class="btn btn-secondary" id="refreshAccountsBtn">刷新账户</button>
+                  <button class="btn btn-ghost" id="loadSnapshotBtn">快照</button>
+                  <button class="btn btn-ghost" id="loadRiskBtn">风险</button>
+                </div>
+                <div id="accountList" class="list"></div>
+              </article>
+
+              <article class="panel">
+                <h3>账户视图</h3>
+                <div id="portfolioView" class="summary-grid"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="tab-system">
+            <div class="grid two">
+              <article class="panel">
+                <h2>认证与邮件</h2>
+                <div id="authStatusView" class="summary-grid"></div>
+                <label>用户名</label>
+                <input id="loginUserInput" value="admin" />
+                <label style="margin-top: 8px">密码</label>
+                <input id="loginPwdInput" type="password" placeholder="admin123456" />
+                <div class="inline-form compact" style="margin-top: 10px">
+                  <button class="btn btn-primary" id="loginBtn">登录</button>
+                  <button class="btn btn-secondary" id="logoutBtn">退出</button>
+                </div>
+
+                <label style="margin-top: 12px">认证开关时的当前密码</label>
+                <input id="enableAuthPwdInput" type="password" />
+                <div class="inline-form compact" style="margin-top: 8px">
+                  <button class="btn btn-ghost" id="enableAuthBtn">启用认证</button>
+                  <button class="btn btn-ghost" id="disableAuthBtn">关闭认证</button>
+                  <button class="btn btn-secondary" id="testEmailBtn">测试邮件通知</button>
+                </div>
+
+                <label style="margin-top: 12px">修改密码</label>
+                <input id="oldPwdInput" type="password" placeholder="当前密码" />
+                <input id="newPwdInput" type="password" placeholder="新密码" style="margin-top: 8px" />
+                <button class="btn btn-primary" id="changePwdBtn" style="margin-top: 8px">修改密码</button>
+                <div class="banner hidden" id="systemMsg"></div>
+              </article>
+
+              <article class="panel">
+                <h3>系统配置</h3>
+                <div class="inline-form compact">
+                  <button class="btn btn-secondary" id="loadConfigBtn">加载配置</button>
+                  <button class="btn btn-primary" id="saveConfigBtn">保存配置</button>
+                </div>
+                <textarea id="configEditor" style="min-height: 520px"></textarea>
+              </article>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="tab-base-data">
+            <div class="grid two">
+              <article class="panel">
+                <h2>股票数据</h2>
+                <p class="muted">支持 A 股、港股、美股基础数据同步与检索。</p>
+                <div class="inline-form compact">
+                  <button class="btn btn-primary" id="syncStockBasicsBtn">手动同步最新基础数据</button>
+                </div>
+
+                <div class="inline-form compact" style="margin-top: 10px">
+                  <select id="stockBasicsMarketSelect">
+                    <option value="">全部市场</option>
+                    <option value="A">A股</option>
+                    <option value="HK">港股</option>
+                    <option value="US">美股</option>
+                  </select>
+                  <input id="stockBasicsSearchInput" placeholder="按代码/名称检索，如 600519 / 腾讯 / AAPL" />
+                  <button class="btn btn-secondary" id="searchStockBasicsBtn">检索</button>
+                </div>
+
+                <div class="banner hidden" id="stockBasicsMsg"></div>
+
+                <div class="stock-basics-table-wrap">
+                  <table class="table" id="stockBasicsTable">
+                    <thead>
+                      <tr>
+                        <th>市场</th>
+                        <th>子市场</th>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th>所属板块</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="panel">
+                <h3>基础信息详情</h3>
+                <p class="muted">本地基础数据 + 远程实时行情（fail-open）。</p>
+                <div id="stockBasicsDetail" class="markdown-view">请选择左侧股票查看详情</div>
+              </article>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="chartTooltip" class="chart-tooltip hidden"></div>
+
+    <div id="globalLoading" class="global-loading hidden">
+      <div class="loading-box">
+        <div class="spinner"></div>
+        <p id="globalLoadingText">正在处理...</p>
+      </div>
+    </div>
+
+    <div id="commandPalette" class="command-palette hidden">
+      <div class="command-dialog">
+        <div class="command-title">快捷命令</div>
+        <input id="commandPaletteInput" placeholder="输入命令，如：打开市场复盘 / 分析 AAPL" />
+        <div id="commandList" class="command-list"></div>
+      </div>
+    </div>
+
+    <div id="futuresCategoryModal" class="futures-manage-modal hidden">
+      <div class="futures-manage-dialog">
+        <div class="futures-manage-head">
+          <h3>分类管理</h3>
+          <button class="btn btn-ghost btn-mini" id="closeFuturesCategoryModalBtn">关闭</button>
+        </div>
+        <p class="muted">用于组织观察池，例如贵金属、工业金属、能源化工等。</p>
+        <label>分类名称</label>
+        <input id="futuresCategoryNameInput" placeholder="例如：贵金属 / 工业金属" />
+        <label style="margin-top: 8px">分类说明</label>
+        <input id="futuresCategoryDescInput" placeholder="可选：策略说明" />
+        <div class="inline-form compact" style="margin-top: 12px">
+          <button class="btn btn-primary" id="createFuturesCategoryBtn">确认新增</button>
+          <button class="btn btn-ghost hidden" id="cancelFuturesCategoryEditBtn">取消编辑</button>
+        </div>
+        <div style="margin-top: 14px">
+          <h4 style="margin:0 0 8px">已有分类</h4>
+          <div id="futuresCategoryList" class="futures-manage-list">
+            <div class="muted">暂无分类</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="futuresSymbolModal" class="futures-manage-modal hidden">
+      <div class="futures-manage-dialog">
+        <div class="futures-manage-head">
+          <h3>品种管理</h3>
+          <button class="btn btn-ghost btn-mini" id="closeFuturesSymbolModalBtn">关闭</button>
+        </div>
+        <p class="muted">按分类添加品种，可从预设下拉自动填充；手动输入建议标准代码。</p>
+        <label>所属分类</label>
+        <select id="futuresCategorySelect"></select>
+        <label style="margin-top: 8px">预设品种（按交易所）</label>
+        <select id="futuresPresetSelect"></select>
+        <label style="margin-top: 8px">品种名称</label>
+        <input id="futuresSymbolNameInput" placeholder="例如：白银主连" />
+        <label style="margin-top: 8px">品种代码</label>
+        <input id="futuresSymbolCodeInput" placeholder="例如：101.SI00Y / LC / au2605" />
+        <button class="btn btn-secondary" id="createFuturesSymbolBtn" style="margin-top: 12px">确认添加</button>
+        <div style="margin-top: 14px">
+          <h4 style="margin:0 0 8px">已添加品种</h4>
+          <div id="futuresManageList" class="futures-manage-list">
+            <div class="muted">暂无已添加品种</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="futuresConsoleModal" class="futures-manage-modal hidden">
+      <div class="futures-manage-dialog">
+        <div class="futures-manage-head">
+          <h3>监测控制台</h3>
+          <button class="btn btn-ghost btn-mini" id="closeFuturesConsoleModalBtn">关闭</button>
+        </div>
+        <p class="muted">实时行情 + K线 + 成交量，支持时间粒度切换。</p>
+        <label>默认K线粒度</label>
+        <select id="futuresTimeframeSelect"></select>
+        <label style="margin-top: 8px">自动刷新间隔</label>
+        <select id="futuresAutoRefreshSelect">
+          <option value="30000">30秒</option>
+          <option value="60000">1分钟</option>
+          <option value="120000">2分钟</option>
+          <option value="300000">5分钟</option>
+          <option value="0">关闭自动刷新</option>
+        </select>
+        <div class="inline-form compact" style="margin-top: 10px">
+          <button class="btn btn-ghost" id="refreshFuturesMonitorBtn">刷新监测</button>
+        </div>
+        <div id="futuresSummary" class="summary-grid" style="margin-top: 10px"></div>
+        <div class="banner hidden" id="futuresMsg"></div>
+      </div>
+    </div>
+
+    <div id="stockCategoryModal" class="futures-manage-modal hidden">
+      <div class="futures-manage-dialog">
+        <div class="futures-manage-head">
+          <h3>分类管理</h3>
+          <button class="btn btn-ghost btn-mini" id="closeStockCategoryModalBtn">关闭</button>
+        </div>
+        <p class="muted">用于组织股票观察池，例如核心仓位、短线观察、港美科技等。</p>
+        <label>分类名称</label>
+        <input id="stockCategoryNameInput" placeholder="例如：核心仓位 / 港美科技" />
+        <label style="margin-top: 8px">分类说明</label>
+        <input id="stockCategoryDescInput" placeholder="可选：策略备注" />
+        <div class="inline-form compact" style="margin-top: 12px">
+          <button class="btn btn-primary" id="createStockCategoryBtn">确认新增</button>
+          <button class="btn btn-ghost hidden" id="cancelStockCategoryEditBtn">取消编辑</button>
+        </div>
+        <div style="margin-top: 14px">
+          <h4 style="margin:0 0 8px">已有分类</h4>
+          <div id="stockCategoryList" class="futures-manage-list">
+            <div class="muted">暂无分类</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="stockSymbolModal" class="futures-manage-modal hidden">
+      <div class="futures-manage-dialog">
+        <div class="futures-manage-head">
+          <h3>股票池管理</h3>
+          <button class="btn btn-ghost btn-mini" id="closeStockSymbolModalBtn">关闭</button>
+        </div>
+        <p class="muted">可从基础数据中快速选择，也可手动输入代码。</p>
+        <label>所属分类</label>
+        <select id="stockCategorySelect"></select>
+        <label style="margin-top: 8px">基础数据快速选择</label>
+        <select id="stockBasicsQuickSelect"></select>
+        <label style="margin-top: 8px">股票代码</label>
+        <input id="stockSymbolCodeInput" placeholder="例如：600519 / 00700 / AAPL" />
+        <label style="margin-top: 8px">显示名称</label>
+        <input id="stockSymbolNameInput" placeholder="可选，默认自动带出" />
+        <button class="btn btn-secondary" id="createStockSymbolBtn" style="margin-top: 12px">确认添加</button>
+        <div style="margin-top: 14px">
+          <h4 style="margin:0 0 8px">已添加股票</h4>
+          <div id="stockManageList" class="futures-manage-list">
+            <div class="muted">暂无已添加股票</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="stockConsoleModal" class="futures-manage-modal hidden">
+      <div class="futures-manage-dialog">
+        <div class="futures-manage-head">
+          <h3>监测控制台</h3>
+          <button class="btn btn-ghost btn-mini" id="closeStockConsoleModalBtn">关闭</button>
+        </div>
+        <p class="muted">支持分钟、日K、周K、月K切换，默认自动刷新 30 秒。</p>
+        <label>默认K线粒度</label>
+        <select id="stockTimeframeSelect"></select>
+        <label style="margin-top: 8px">自动刷新间隔</label>
+        <select id="stockAutoRefreshSelect">
+          <option value="30000">30秒</option>
+          <option value="60000">1分钟</option>
+          <option value="120000">2分钟</option>
+          <option value="300000">5分钟</option>
+          <option value="0">关闭自动刷新</option>
+        </select>
+        <div class="inline-form compact" style="margin-top: 10px">
+          <button class="btn btn-ghost" id="refreshStockMonitorBtn">刷新监测</button>
+        </div>
+        <div id="stockSummary" class="summary-grid" style="margin-top: 10px"></div>
+        <div class="banner hidden" id="stockMsg"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

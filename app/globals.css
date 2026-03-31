@@ -1,0 +1,186 @@
+@import 'tailwindcss';
+@source ".";
+@source "../components";
+
+:root {
+  --background: 210 30% 98%;
+  --foreground: 222 32% 14%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 32% 14%;
+  --primary: 218 85% 52%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 214 32% 94%;
+  --secondary-foreground: 222 32% 20%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 32% 14%;
+  --muted: 214 28% 92%;
+  --muted-foreground: 220 14% 42%;
+  --accent: 205 95% 44%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 214 25% 86%;
+  --input: 214 25% 86%;
+  --ring: 218 85% 52%;
+}
+
+.dark {
+  --background: 216 25% 9%;
+  --foreground: 210 22% 94%;
+  --card: 216 24% 12%;
+  --card-foreground: 210 22% 94%;
+  --primary: 200 97% 54%;
+  --primary-foreground: 214 28% 11%;
+  --secondary: 216 20% 18%;
+  --secondary-foreground: 210 22% 94%;
+  --popover: 216 24% 12%;
+  --popover-foreground: 210 22% 94%;
+  --muted: 216 20% 18%;
+  --muted-foreground: 214 14% 70%;
+  --accent: 191 85% 42%;
+  --accent-foreground: 210 22% 94%;
+  --destructive: 0 67% 51%;
+  --destructive-foreground: 210 22% 94%;
+  --border: 216 16% 24%;
+  --input: 216 16% 24%;
+  --ring: 200 97% 54%;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at 8% 0%, hsl(197 100% 92% / 0.58), transparent 32%),
+      radial-gradient(circle at 92% 15%, hsl(202 100% 92% / 0.46), transparent 28%),
+      hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'Avenir Next', 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
+  }
+
+  .dark body {
+    background:
+      radial-gradient(circle at 10% 0%, hsl(198 100% 22% / 0.35), transparent 32%),
+      radial-gradient(circle at 85% 22%, hsl(214 70% 22% / 0.35), transparent 30%),
+      hsl(var(--background));
+  }
+}
+
+@layer utilities {
+  .bg-background {
+    background-color: hsl(var(--background));
+  }
+
+  .bg-card {
+    background-color: hsl(var(--card));
+  }
+
+  .bg-primary {
+    background-color: hsl(var(--primary));
+  }
+
+  .bg-secondary {
+    background-color: hsl(var(--secondary));
+  }
+
+  .bg-popover {
+    background-color: hsl(var(--popover));
+  }
+
+  .bg-muted {
+    background-color: hsl(var(--muted));
+  }
+
+  .bg-accent {
+    background-color: hsl(var(--accent));
+  }
+
+  .bg-destructive {
+    background-color: hsl(var(--destructive));
+  }
+
+  .text-foreground {
+    color: hsl(var(--foreground));
+  }
+
+  .text-card-foreground {
+    color: hsl(var(--card-foreground));
+  }
+
+  .text-primary {
+    color: hsl(var(--primary));
+  }
+
+  .text-primary-foreground {
+    color: hsl(var(--primary-foreground));
+  }
+
+  .text-secondary-foreground {
+    color: hsl(var(--secondary-foreground));
+  }
+
+  .text-popover-foreground {
+    color: hsl(var(--popover-foreground));
+  }
+
+  .text-muted-foreground {
+    color: hsl(var(--muted-foreground));
+  }
+
+  .text-accent-foreground {
+    color: hsl(var(--accent-foreground));
+  }
+
+  .text-destructive-foreground {
+    color: hsl(var(--destructive-foreground));
+  }
+
+  .border-border {
+    border-color: hsl(var(--border));
+  }
+
+  .border-input {
+    border-color: hsl(var(--input));
+  }
+
+  .ring-ring {
+    --tw-ring-color: hsl(var(--ring));
+  }
+
+  .ring-offset-background {
+    --tw-ring-offset-color: hsl(var(--background));
+  }
+
+  .price-up-flash {
+    animation: flash-up 420ms ease-out;
+  }
+
+  .price-down-flash {
+    animation: flash-down 420ms ease-out;
+  }
+}
+
+@keyframes flash-up {
+  0% {
+    background: color-mix(in oklab, #22c55e 25%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes flash-down {
+  0% {
+    background: color-mix(in oklab, #ef4444 25%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}

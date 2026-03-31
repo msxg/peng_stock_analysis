@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log*
+.DS_Store
+.next
+data/*.db
+data/*.db-*
+tmp/
+.env
+.playwright-browsers/
