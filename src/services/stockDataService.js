@@ -2,11 +2,52 @@ import { inferMarket, normalizeStockCode, toYahooSymbol } from '../utils/stockCo
 import { movingAverage, pctChange, average } from '../utils/indicators.js';
 import { HttpError } from '../utils/httpError.js';
 import { nowLocalDateTime, toLocalDateTime } from '../utils/date.js';
+import { stockBasicsRepository } from '../repositories/stockBasicsRepository.js';
+import { getDb } from '../db/database.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { env } from '../config/env.js';
 
 const execFileAsync = promisify(execFile);
+let localDailyBarsInitialized = false;
+
+function toBasicLookupCode(code = '') {
+  const normalized = normalizeStockCode(code);
+  const cnMatch = normalized.match(/^(SH|SZ)(\d{6})$/);
+  if (cnMatch) return cnMatch[2];
+  const hkMatch = normalized.match(/^HK(\d{5})$/);
+  if (hkMatch) return hkMatch[1];
+  return normalized;
+}
+
+function resolvePreferredStockName(stockCode, source, fallbackName = '') {
+  const normalizedSource = String(source || '').trim().toLowerCase();
+  const normalizedFallback = String(fallbackName || '').trim();
+  const normalizedCode = normalizeStockCode(stockCode);
+  const codeLikeFallback = (
+    !normalizedFallback
+    || normalizedFallback === normalizedCode
+    || normalizedFallback === toBasicLookupCode(normalizedCode)
+  );
+  const shouldLookupByCode = (
+    normalizedSource === 'local.sqlite.daily'
+    || normalizedSource === 'local.sqlite.day'
+    || normalizedSource === 'synthetic'
+    || normalizedSource === 'stooq'
+    || codeLikeFallback
+    || /\(synthetic\)/i.test(normalizedFallback)
+    || /\(stooq\)/i.test(normalizedFallback)
+  );
+
+  if (!shouldLookupByCode) {
+    return normalizedFallback || normalizedCode;
+  }
+
+  const lookupCode = toBasicLookupCode(normalizedCode);
+  const local = stockBasicsRepository.findByCode(lookupCode)?.[0] || null;
+  const localName = String(local?.name || '').trim();
+  return localName || normalizedFallback || normalizedCode;
+}
 
 function getRangeFromDays(days = 180) {
   if (days <= 30) return '1mo';
@@ -88,6 +129,173 @@ function toXTickType(stockCode) {
   if (market === 'CN_SH' || market === 'CN_SZ') return 1;
   if (market === 'HK') return 3;
   return null;
+}
+
+function toEastmoneySecId(stockCode) {
+  const normalized = normalizeStockCode(stockCode);
+  const sh = normalized.match(/^SH(\d{6})$/);
+  if (sh) return `1.${sh[1]}`;
+  const sz = normalized.match(/^SZ(\d{6})$/);
+  if (sz) return `0.${sz[1]}`;
+  if (/^\d{6}$/.test(normalized)) {
+    return normalized.startsWith('6') ? `1.${normalized}` : `0.${normalized}`;
+  }
+  return '';
+}
+
+function toTushareLikeTsCode(stockCode = '') {
+  const normalized = normalizeStockCode(stockCode);
+  const sh = normalized.match(/^SH(\d{6})$/);
+  if (sh) return `${sh[1]}.SH`;
+  const sz = normalized.match(/^SZ(\d{6})$/);
+  if (sz) return `${sz[1]}.SZ`;
+  const core = normalized.match(/^(\d{6})$/);
+  if (core) return core[1].startsWith('6') ? `${core[1]}.SH` : `${core[1]}.SZ`;
+  return normalized;
+}
+
+function compactDateToDash(text = '') {
+  const value = String(text || '').trim();
+  if (/^\d{8}$/.test(value)) {
+    return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+  }
+  return value;
+}
+
+function dateToTsSeconds(dateText = '') {
+  const date = compactDateToDash(dateText);
+  const ts = Date.parse(`${date}T00:00:00+08:00`);
+  if (!Number.isFinite(ts)) return null;
+  return Math.floor(ts / 1000);
+}
+
+function daysFromToday(dateText = '') {
+  const date = compactDateToDash(dateText);
+  const ts = Date.parse(`${date}T00:00:00+08:00`);
+  if (!Number.isFinite(ts)) return Number.POSITIVE_INFINITY;
+  return Math.abs(Date.now() - ts) / (24 * 60 * 60 * 1000);
+}
+
+function ensureLocalDailyBarsTable() {
+  if (localDailyBarsInitialized) return;
+  const db = getDb();
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS stock_daily_bars (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      stock_code TEXT NOT NULL,
+      ts_code TEXT NOT NULL,
+      trade_date TEXT NOT NULL,
+      open REAL,
+      high REAL,
+      low REAL,
+      close REAL,
+      pre_close REAL,
+      change REAL,
+      pct_chg REAL,
+      vol REAL,
+      amount REAL,
+      source TEXT NOT NULL DEFAULT 'tushare.daily',
+      synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(stock_code, trade_date)
+    )
+  `).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_stock_daily_bars_code_date ON stock_daily_bars(stock_code, trade_date DESC)').run();
+  localDailyBarsInitialized = true;
+}
+
+function readLocalDailyBars(stockCode = '', limit = 240) {
+  try {
+    ensureLocalDailyBarsTable();
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT trade_date, open, high, low, close, vol
+      FROM stock_daily_bars
+      WHERE stock_code = ?
+      ORDER BY trade_date DESC
+      LIMIT ?
+    `).all(stockCode, Math.max(1, Number(limit) || 240));
+    return rows
+      .slice()
+      .reverse()
+      .map((item) => ({
+        ts: dateToTsSeconds(item.trade_date),
+        date: compactDateToDash(item.trade_date),
+        open: Number(item.open || 0),
+        high: Number(item.high || 0),
+        low: Number(item.low || 0),
+        close: Number(item.close || 0),
+        volume: Number(item.vol || 0),
+      }))
+      .filter((item) => Number.isFinite(item.close) && item.close > 0 && item.date);
+  } catch {
+    return [];
+  }
+}
+
+function upsertLocalDailyBars(stockCode = '', rows = [], source = 'external') {
+  if (!stockCode || !Array.isArray(rows) || rows.length === 0) return;
+  try {
+    ensureLocalDailyBarsTable();
+    const db = getDb();
+    const tsCode = toTushareLikeTsCode(stockCode);
+    const insert = db.prepare(`
+      INSERT INTO stock_daily_bars (
+        stock_code, ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount, source, synced_at, updated_at
+      ) VALUES (
+        @stock_code, @ts_code, @trade_date, @open, @high, @low, @close, @pre_close, @change, @pct_chg, @vol, @amount, @source, datetime('now'), datetime('now')
+      )
+      ON CONFLICT(stock_code, trade_date) DO UPDATE SET
+        ts_code = excluded.ts_code,
+        open = excluded.open,
+        high = excluded.high,
+        low = excluded.low,
+        close = excluded.close,
+        pre_close = excluded.pre_close,
+        change = excluded.change,
+        pct_chg = excluded.pct_chg,
+        vol = excluded.vol,
+        amount = excluded.amount,
+        source = excluded.source,
+        synced_at = datetime('now'),
+        updated_at = datetime('now')
+    `);
+    const tx = db.transaction((bars) => {
+      let prevClose = null;
+      bars.forEach((item) => {
+        const close = Number(item.close || 0);
+        if (!Number.isFinite(close) || close <= 0) return;
+        const dateText = compactDateToDash(item.date);
+        const tradeDate = dateText.replace(/-/g, '');
+        if (!/^\d{8}$/.test(tradeDate)) return;
+        const open = Number(item.open || close);
+        const high = Number(item.high || close);
+        const low = Number(item.low || close);
+        const volume = Number(item.volume || 0);
+        const pre = Number.isFinite(prevClose) ? prevClose : close;
+        const change = close - pre;
+        const pctChg = pre ? (change / pre) * 100 : 0;
+        insert.run({
+          stock_code: stockCode,
+          ts_code: tsCode,
+          trade_date: tradeDate,
+          open: Number.isFinite(open) ? open : close,
+          high: Number.isFinite(high) ? high : close,
+          low: Number.isFinite(low) ? low : close,
+          close,
+          pre_close: pre,
+          change,
+          pct_chg: pctChg,
+          vol: Number.isFinite(volume) ? volume : 0,
+          amount: null,
+          source: String(source || 'external').slice(0, 64),
+        });
+        prevClose = close;
+      });
+    });
+    tx(rows);
+  } catch {}
 }
 
 function parseTencentRealtimeQuote(text = '', stockCode = '') {
@@ -319,6 +527,155 @@ async function requestXTickMinuteSeries(stockCode, { limit = 120, fq = 'none' } 
     quoteSeed: candles[candles.length - 1] || null,
     candleDataSource: 'xtick.kline.minute',
   };
+}
+
+function parseEastmoneyKlinePayload(payload = {}) {
+  const data = payload?.data;
+  const rows = Array.isArray(data?.klines) ? data.klines : [];
+  if (!rows.length) {
+    throw new HttpError(404, '东方财富日线数据为空');
+  }
+
+  const parsed = rows
+    .map((line) => String(line || '').split(','))
+    .map((parts) => {
+      const date = String(parts[0] || '').trim();
+      const open = Number(parts[1] || 0);
+      const close = Number(parts[2] || 0);
+      const high = Number(parts[3] || 0);
+      const low = Number(parts[4] || 0);
+      const volume = Number(parts[5] || 0);
+      const amount = Number(parts[6] || 0);
+      if (!date || !Number.isFinite(close) || close <= 0) return null;
+      return {
+        ts: Math.floor(new Date(`${date}T15:00:00+08:00`).getTime() / 1000),
+        date,
+        open: Number.isFinite(open) && open > 0 ? open : close,
+        high: Number.isFinite(high) && high > 0 ? high : close,
+        low: Number.isFinite(low) && low > 0 ? low : close,
+        close,
+        volume: Number.isFinite(volume) ? volume : 0,
+        amount: Number.isFinite(amount) ? amount : 0,
+      };
+    })
+    .filter(Boolean);
+
+  if (!parsed.length) {
+    throw new HttpError(404, '东方财富日线解析后为空');
+  }
+
+  return {
+    meta: {
+      shortName: String(data?.name || data?.code || '').trim() || null,
+      dataSource: 'eastmoney.kline',
+      secid: String(data?.code || '').trim() || null,
+    },
+    rows: parsed,
+  };
+}
+
+function parseTencentDailyKlinePayload(payload = {}, symbol = '', { fq = 'none' } = {}) {
+  const normalizedSymbol = String(symbol || '').trim().toLowerCase();
+  const node = payload?.data?.[normalizedSymbol];
+  const fqMode = String(fq || 'none').trim().toLowerCase();
+  const klineKey = fqMode === 'qfq' ? 'qfqday' : fqMode === 'hfq' ? 'hfqday' : 'day';
+  const rows = Array.isArray(node?.[klineKey]) ? node[klineKey] : [];
+
+  if (!rows.length) {
+    throw new HttpError(404, '腾讯日线数据为空');
+  }
+
+  const parsed = rows
+    .map((parts) => Array.isArray(parts) ? parts : [])
+    .map((parts) => {
+      const date = String(parts[0] || '').trim();
+      const open = Number(parts[1] || 0);
+      const close = Number(parts[2] || 0);
+      const high = Number(parts[3] || 0);
+      const low = Number(parts[4] || 0);
+      const volume = Number(parts[5] || 0);
+      if (!date || !Number.isFinite(close) || close <= 0) return null;
+      return {
+        ts: Math.floor(new Date(`${date}T15:00:00+08:00`).getTime() / 1000),
+        date,
+        open: Number.isFinite(open) && open > 0 ? open : close,
+        high: Number.isFinite(high) && high > 0 ? high : close,
+        low: Number.isFinite(low) && low > 0 ? low : close,
+        close,
+        volume: Number.isFinite(volume) ? volume : 0,
+        amount: 0,
+      };
+    })
+    .filter(Boolean);
+
+  if (!parsed.length) {
+    throw new HttpError(404, '腾讯日线解析后为空');
+  }
+
+  const qt = node?.qt?.[normalizedSymbol];
+  return {
+    meta: {
+      shortName: String(Array.isArray(qt) ? (qt[1] || '') : '').trim() || null,
+      dataSource: 'tencent.fqkline',
+      symbol: normalizedSymbol,
+      fqMode,
+    },
+    rows: parsed,
+  };
+}
+
+async function requestEastmoneyCnDailyChart(stockCode, { limit = 300 } = {}) {
+  const secid = toEastmoneySecId(stockCode);
+  if (!secid) {
+    throw new HttpError(400, '东方财富日线仅支持A股/沪深指数代码');
+  }
+
+  const url = new URL('https://push2his.eastmoney.com/api/qt/stock/kline/get');
+  url.searchParams.set('secid', secid);
+  url.searchParams.set('klt', '101');
+  url.searchParams.set('fqt', '0'); // 不复权，和交易软件现价保持一致
+  url.searchParams.set('lmt', String(Math.max(Number(limit) || 300, 120)));
+  url.searchParams.set('end', '20500101');
+  url.searchParams.set('fields1', 'f1,f2,f3,f4,f5,f6');
+  url.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61');
+
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (peng-stock-analysis stock-data eastmoney-kline)',
+      Referer: 'https://quote.eastmoney.com/',
+    },
+  });
+  if (!response.ok) {
+    throw new HttpError(response.status, `东方财富日线请求失败: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  return parseEastmoneyKlinePayload(payload);
+}
+
+async function requestTencentCnDailyChart(stockCode, { limit = 300, fq = 'none' } = {}) {
+  const symbol = toTencentStockSymbol(stockCode);
+  if (!symbol) {
+    throw new HttpError(400, '腾讯日线仅支持A股/沪深指数代码');
+  }
+
+  const normalizedFq = String(fq || 'none').trim().toLowerCase();
+  const safeFq = ['none', 'bfq', 'qfq', 'hfq'].includes(normalizedFq) ? normalizedFq : 'none';
+  const url = new URL('https://web.ifzq.gtimg.cn/appstock/app/fqkline/get');
+  url.searchParams.set('param', `${symbol},day,,,${Math.max(Number(limit) || 300, 120)},${safeFq}`);
+
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (peng-stock-analysis stock-data tencent-kline)',
+      Referer: 'https://gu.qq.com/',
+    },
+  });
+  if (!response.ok) {
+    throw new HttpError(response.status, `腾讯日线请求失败: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  return parseTencentDailyKlinePayload(payload, symbol, { fq: safeFq });
 }
 
 async function requestBufferByCurl(url, { referer = '', timeoutMs = 8000 } = {}) {
@@ -724,19 +1081,78 @@ export const stockDataService = {
     const normalized = normalizeStockCode(stockCode);
     const symbol = toYahooSymbol(normalized);
     const range = getRangeFromDays(days);
+    const market = inferMarket(normalized);
+    const requiredRows = Math.max(Math.round(Number(days) || 0), 60);
+    const preferredLimit = Math.max(requiredRows + 40, 220);
     let payload;
-    let source = 'yahoo';
-    try {
-      payload = await requestYahooChart(symbol, { range, interval });
-    } catch (yahooError) {
+    let source = 'eastmoney.kline';
+    if (market === 'CN_SH' || market === 'CN_SZ') {
+      const canUseLocalDaily = String(interval || '1d').trim() === '1d';
+      if (canUseLocalDaily) {
+        const localRows = readLocalDailyBars(normalized, preferredLimit);
+        const latestLocalDate = localRows[localRows.length - 1]?.date || '';
+        const looksFresh = latestLocalDate && daysFromToday(latestLocalDate) <= 10;
+        if (localRows.length >= requiredRows || (looksFresh && localRows.length >= 10)) {
+          payload = {
+            meta: {
+              shortName: normalized,
+              longName: normalized,
+            },
+            rows: localRows,
+          };
+          source = 'local.sqlite.daily';
+        }
+      }
+      if (!payload) {
       try {
-        payload = await requestStooqChart(normalized, days);
-        source = 'stooq';
-        payload.meta.fallbackReason = yahooError.message;
-      } catch (stooqError) {
-        payload = buildSyntheticChart(symbol, Math.max(days, 200));
-        source = 'synthetic';
-        payload.meta.fallbackReason = `${yahooError.message}; ${stooqError.message}`;
+        payload = await requestEastmoneyCnDailyChart(normalized, {
+          limit: preferredLimit,
+        });
+      } catch (cnError) {
+        try {
+          payload = await requestTencentCnDailyChart(normalized, {
+            limit: preferredLimit,
+            fq: 'none',
+          });
+          source = 'tencent.fqkline';
+          payload.meta.fallbackReason = cnError.message;
+        } catch (tencentError) {
+          try {
+            payload = await requestYahooChart(symbol, { range, interval });
+            source = 'yahoo';
+            payload.meta.fallbackReason = `${cnError.message}; ${tencentError.message}`;
+          } catch (yahooError) {
+            try {
+              payload = await requestStooqChart(normalized, days);
+              source = 'stooq';
+              payload.meta.fallbackReason = `${cnError.message}; ${tencentError.message}; ${yahooError.message}`;
+            } catch (stooqError) {
+              throw new HttpError(
+                502,
+                `A股日线拉取失败: ${cnError.message}; ${tencentError.message}; ${yahooError.message}; ${stooqError.message}`,
+              );
+            }
+          }
+        }
+      }
+        if (payload?.rows?.length) {
+          upsertLocalDailyBars(normalized, payload.rows, source);
+        }
+      }
+    } else {
+      source = 'yahoo';
+      try {
+        payload = await requestYahooChart(symbol, { range, interval });
+      } catch (yahooError) {
+        try {
+          payload = await requestStooqChart(normalized, days);
+          source = 'stooq';
+          payload.meta.fallbackReason = yahooError.message;
+        } catch (stooqError) {
+          payload = buildSyntheticChart(symbol, Math.max(days, 200));
+          source = 'synthetic';
+          payload.meta.fallbackReason = `${yahooError.message}; ${stooqError.message}`;
+        }
       }
     }
 
@@ -757,11 +1173,12 @@ export const stockDataService = {
     const prev = rows[rows.length - 2] || latest;
     const avgVol5 = average(volumes.slice(-5));
 
+    const rawStockName = payload.meta?.shortName || payload.meta?.longName || normalized;
     const quote = {
       stockCode: normalized,
       symbol,
-      stockName: payload.meta?.shortName || payload.meta?.longName || normalized,
-      market: inferMarket(normalized),
+      stockName: resolvePreferredStockName(normalized, source, rawStockName),
+      market,
       price: latest?.close || 0,
       open: latest?.open || 0,
       high: latest?.high || 0,

@@ -17,6 +17,8 @@ import { stockBasicsController } from '../controllers/stockBasicsController.js';
 import { stockMonitorController } from '../controllers/stockMonitorController.js';
 import { marketDataController } from '../controllers/marketDataController.js';
 import { focusNewsController } from '../controllers/focusNewsController.js';
+import { blueChipModeController } from '../controllers/blueChipModeController.js';
+import { bluechipPoolController } from '../controllers/bluechipPoolController.js';
 
 const upload = multer({ dest: 'tmp/uploads' });
 const router = Router();
@@ -86,6 +88,19 @@ router.post('/stock-monitor/symbols', asyncHandler(stockMonitorController.create
 router.post('/stock-monitor/symbols/:symbolId/move', stockMonitorController.moveSymbol);
 router.delete('/stock-monitor/symbols/:symbolId', stockMonitorController.deleteSymbol);
 router.get('/stock-monitor/monitor', asyncHandler(stockMonitorController.monitor));
+router.get('/strategy/bluechip/defaults', blueChipModeController.defaults);
+router.get('/strategy/bluechip/pools', bluechipPoolController.listPools);
+router.post('/strategy/bluechip/pools', bluechipPoolController.createPool);
+router.put('/strategy/bluechip/pools/:poolId', bluechipPoolController.updatePool);
+router.delete('/strategy/bluechip/pools/:poolId', bluechipPoolController.deletePool);
+router.post('/strategy/bluechip/pools/:poolId/symbols', bluechipPoolController.createSymbol);
+router.put('/strategy/bluechip/pools/:poolId/symbols/:symbolId', bluechipPoolController.updateSymbol);
+router.delete('/strategy/bluechip/pools/:poolId/symbols/:symbolId', bluechipPoolController.deleteSymbol);
+router.post('/strategy/bluechip/analyze', asyncHandler(blueChipModeController.analyze));
+router.post('/strategy/bluechip/batch-analyze', asyncHandler(blueChipModeController.batchAnalyze));
+router.post('/strategy/bluechip/results/save', blueChipModeController.saveBatchSignals);
+router.get('/strategy/bluechip/results', blueChipModeController.listSavedSignals);
+router.get('/strategy/bluechip/results/batches', blueChipModeController.listSavedBatches);
 
 router.post('/backtest/run', asyncHandler(backtestController.run));
 router.get('/backtest/results', backtestController.list);

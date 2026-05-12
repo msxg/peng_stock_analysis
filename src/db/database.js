@@ -261,6 +261,67 @@ function createSchema(connection) {
     CREATE INDEX IF NOT EXISTS idx_stock_monitor_symbols_category ON stock_monitor_symbols (category_id, sort_order ASC, id ASC);
     CREATE INDEX IF NOT EXISTS idx_stock_monitor_symbols_active ON stock_monitor_symbols (is_active, sort_order ASC, id ASC);
 
+    CREATE TABLE IF NOT EXISTS bluechip_pools (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 100,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS bluechip_pool_symbols (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pool_id INTEGER NOT NULL,
+      stock_code TEXT NOT NULL,
+      stock_name TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 100,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (pool_id) REFERENCES bluechip_pools(id) ON DELETE CASCADE,
+      UNIQUE (pool_id, stock_code)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bluechip_pool_symbols_pool ON bluechip_pool_symbols (pool_id, sort_order ASC, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_bluechip_pool_symbols_active ON bluechip_pool_symbols (is_active, sort_order ASC, id ASC);
+
+    CREATE TABLE IF NOT EXISTS bluechip_analysis_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id TEXT NOT NULL,
+      analysis_mode TEXT NOT NULL,
+      source_mode TEXT NOT NULL,
+      pool_id INTEGER,
+      pool_code TEXT,
+      pool_name TEXT,
+      index_code TEXT,
+      index_name TEXT,
+      analysis_date TEXT NOT NULL,
+      signal_date TEXT NOT NULL,
+      stock_code TEXT NOT NULL,
+      stock_name TEXT,
+      signal_side TEXT NOT NULL,
+      signal_type TEXT NOT NULL,
+      signal_price REAL,
+      signal_reason TEXT,
+      signal_pnl_pct REAL,
+      params_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bluechip_analysis_signals_batch
+      ON bluechip_analysis_signals (batch_id, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_bluechip_analysis_signals_analysis_date
+      ON bluechip_analysis_signals (analysis_date DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_bluechip_analysis_signals_signal_date
+      ON bluechip_analysis_signals (signal_date DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_bluechip_analysis_signals_stock
+      ON bluechip_analysis_signals (stock_code, signal_date DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_bluechip_analysis_signals_pool
+      ON bluechip_analysis_signals (pool_code, analysis_date DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id TEXT NOT NULL UNIQUE,
@@ -682,6 +743,81 @@ function seedDefaults(connection) {
       VALUES (?, '贵州茅台', '600519', 'A', 10, 1, datetime('now'), datetime('now'))
       ON CONFLICT(category_id, market, stock_code) DO NOTHING
     `).run(watchlist.id);
+  }
+
+  connection.prepare(`
+    INSERT INTO bluechip_pools (code, name, description, sort_order, is_enabled, created_at, updated_at)
+    VALUES ('SH_SAMPLE', '上证示例池', '默认上证示例标的池', 10, 1, datetime('now'), datetime('now'))
+    ON CONFLICT(code) DO NOTHING
+  `).run();
+  connection.prepare(`
+    INSERT INTO bluechip_pools (code, name, description, sort_order, is_enabled, created_at, updated_at)
+    VALUES ('SZ_SAMPLE', '深证示例池', '默认深证示例标的池', 20, 1, datetime('now'), datetime('now'))
+    ON CONFLICT(code) DO NOTHING
+  `).run();
+  connection.prepare(`
+    INSERT INTO bluechip_pools (code, name, description, sort_order, is_enabled, created_at, updated_at)
+    VALUES ('HS300_SAMPLE', '沪深300示例池', '默认沪深300示例标的池', 30, 1, datetime('now'), datetime('now'))
+    ON CONFLICT(code) DO NOTHING
+  `).run();
+  connection.prepare(`
+    INSERT INTO bluechip_pools (code, name, description, sort_order, is_enabled, created_at, updated_at)
+    VALUES ('KC50_ALL', '科创50成分股', '科创50成分股（初始化）', 40, 1, datetime('now'), datetime('now'))
+    ON CONFLICT(code) DO NOTHING
+  `).run();
+
+  const shSample = connection.prepare('SELECT id FROM bluechip_pools WHERE code = ?').get('SH_SAMPLE');
+  if (shSample?.id) {
+    ['600519', '600036', '600000', '600887', '601318', '601888', '600900', '600276'].forEach((code, index) => {
+      connection.prepare(`
+        INSERT INTO bluechip_pool_symbols (
+          pool_id, stock_code, stock_name, sort_order, is_active, created_at, updated_at
+        ) VALUES (?, ?, NULL, ?, 1, datetime('now'), datetime('now'))
+        ON CONFLICT(pool_id, stock_code) DO NOTHING
+      `).run(shSample.id, code, (index + 1) * 10);
+    });
+  }
+
+  const szSample = connection.prepare('SELECT id FROM bluechip_pools WHERE code = ?').get('SZ_SAMPLE');
+  if (szSample?.id) {
+    ['000001', '000333', '000858', '002415', '002594', '300750', '300059', '002142'].forEach((code, index) => {
+      connection.prepare(`
+        INSERT INTO bluechip_pool_symbols (
+          pool_id, stock_code, stock_name, sort_order, is_active, created_at, updated_at
+        ) VALUES (?, ?, NULL, ?, 1, datetime('now'), datetime('now'))
+        ON CONFLICT(pool_id, stock_code) DO NOTHING
+      `).run(szSample.id, code, (index + 1) * 10);
+    });
+  }
+
+  const hs300Sample = connection.prepare('SELECT id FROM bluechip_pools WHERE code = ?').get('HS300_SAMPLE');
+  if (hs300Sample?.id) {
+    ['600519', '601318', '600036', '600276', '000333', '000858', '300750', '002415', '601888', '600900'].forEach((code, index) => {
+      connection.prepare(`
+        INSERT INTO bluechip_pool_symbols (
+          pool_id, stock_code, stock_name, sort_order, is_active, created_at, updated_at
+        ) VALUES (?, ?, NULL, ?, 1, datetime('now'), datetime('now'))
+        ON CONFLICT(pool_id, stock_code) DO NOTHING
+      `).run(hs300Sample.id, code, (index + 1) * 10);
+    });
+  }
+
+  const kc50Pool = connection.prepare('SELECT id FROM bluechip_pools WHERE code = ?').get('KC50_ALL');
+  if (kc50Pool?.id) {
+    [
+      '688008', '688009', '688012', '688027', '688036', '688041', '688047', '688065', '688072', '688082',
+      '688099', '688111', '688114', '688120', '688122', '688126', '688169', '688183', '688187', '688188',
+      '688213', '688220', '688223', '688234', '688249', '688256', '688271', '688278', '688297', '688303',
+      '688349', '688361', '688375', '688396', '688469', '688472', '688506', '688521', '688525', '688538',
+      '688568', '688578', '688599', '688608', '688617', '688702', '688728', '688777', '688981', '689009',
+    ].forEach((code, index) => {
+      connection.prepare(`
+        INSERT INTO bluechip_pool_symbols (
+          pool_id, stock_code, stock_name, sort_order, is_active, created_at, updated_at
+        ) VALUES (?, ?, NULL, ?, 1, datetime('now'), datetime('now'))
+        ON CONFLICT(pool_id, stock_code) DO NOTHING
+      `).run(kc50Pool.id, code, (index + 1) * 10);
+    });
   }
 
   connection.prepare(`

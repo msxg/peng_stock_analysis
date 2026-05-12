@@ -58,6 +58,10 @@ const navGroups = [
     items: [
       { href: '/agent', label: 'Agent 问股', icon: Bot },
       { href: '/portfolio', label: '持仓管理', icon: BriefcaseBusiness },
+      { href: '/bluechip-mode', label: '蓝筹模式', icon: CandlestickChart },
+      { href: '/bluechip-batch', label: '蓝筹批量分析', icon: CandlestickChart },
+      { href: '/bluechip-pool-config', label: '标的池配置', icon: CandlestickChart },
+      { href: '/bluechip-results', label: '蓝筹分析记录', icon: CandlestickChart },
     ],
   },
   {
