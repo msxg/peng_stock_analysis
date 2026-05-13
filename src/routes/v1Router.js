@@ -16,6 +16,7 @@ import { futuresController } from '../controllers/futuresController.js';
 import { stockBasicsController } from '../controllers/stockBasicsController.js';
 import { stockMonitorController } from '../controllers/stockMonitorController.js';
 import { marketDataController } from '../controllers/marketDataController.js';
+import { marketMetricsController } from '../controllers/marketMetricsController.js';
 import { focusNewsController } from '../controllers/focusNewsController.js';
 import { blueChipModeController } from '../controllers/blueChipModeController.js';
 import { bluechipPoolController } from '../controllers/bluechipPoolController.js';
@@ -119,6 +120,12 @@ router.post('/system/market-data/sync-all', asyncHandler(marketDataController.sy
 router.post('/system/market-data/sync', asyncHandler(marketDataController.syncFuturesIntraday));
 router.get('/system/market-data/jobs', marketDataController.jobs);
 router.get('/system/market-data/quality', marketDataController.quality);
+router.get('/market-metrics/rules', marketMetricsController.listRules);
+router.post('/market-metrics/rules', marketMetricsController.createRule);
+router.put('/market-metrics/rules/:ruleId', marketMetricsController.updateRule);
+router.get('/market-metrics/daily', marketMetricsController.daily);
+router.get('/market-metrics/daily/range', marketMetricsController.dailyRange);
+router.post('/market-metrics/compute', marketMetricsController.compute);
 
 router.get('/usage/summary', usageController.summary);
 

@@ -71,6 +71,7 @@ const navGroups = [
     items: [
       { href: '/base-data', label: '基础数据', icon: Database },
       { href: '/market-data', label: '行情数据', icon: LineChart },
+      { href: '/market-metrics', label: '市场指标', icon: LineChart },
       { href: '/news-data', label: '资讯数据', icon: Newspaper },
       { href: '/system', label: '系统设置', icon: Settings },
     ],

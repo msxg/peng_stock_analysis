@@ -406,6 +406,47 @@ function createSchema(connection) {
     CREATE INDEX IF NOT EXISTS idx_market_quality_reports_scope
       ON market_data_quality_reports (scope_type, scope_key, generated_at DESC, id DESC);
 
+    CREATE TABLE IF NOT EXISTS a_share_market_metric_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_key TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      scope_key TEXT NOT NULL DEFAULT 'ALL_A',
+      price_mode TEXT NOT NULL DEFAULT 'close_raw',
+      exclude_suspended INTEGER NOT NULL DEFAULT 1,
+      min_listing_trading_days INTEGER NOT NULL DEFAULT 0,
+      include_st INTEGER NOT NULL DEFAULT 1,
+      min_sample_size INTEGER NOT NULL DEFAULT 1,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_a_share_metric_rules_enabled_updated
+      ON a_share_market_metric_rules (is_enabled, updated_at DESC, id DESC);
+
+    CREATE TABLE IF NOT EXISTS a_share_market_metrics_daily (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_day TEXT NOT NULL,
+      rule_id INTEGER NOT NULL,
+      rule_key_snapshot TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      price_mode TEXT NOT NULL,
+      avg_price REAL,
+      median_price REAL,
+      sample_size INTEGER NOT NULL DEFAULT 0,
+      source_dataset TEXT NOT NULL DEFAULT 'stock_eod_bars',
+      computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (rule_id) REFERENCES a_share_market_metric_rules(id) ON DELETE CASCADE,
+      UNIQUE (trade_day, rule_id, scope_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_a_share_metrics_daily_scope_day
+      ON a_share_market_metrics_daily (scope_key, trade_day DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_a_share_metrics_daily_rule_day
+      ON a_share_market_metrics_daily (rule_id, trade_day DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS bluechip_pools (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       code TEXT NOT NULL UNIQUE,
@@ -1120,6 +1161,58 @@ function dropLegacyMonitorTables(connection) {
   `);
 }
 
+function ensureMarketMetricRuleDefaults(connection) {
+  if (!hasTable(connection, 'a_share_market_metric_rules')) return;
+  if (!hasColumn(connection, 'a_share_market_metric_rules', 'is_default')) {
+    connection.exec('ALTER TABLE a_share_market_metric_rules ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0');
+  }
+
+  const total = Number(connection.prepare(`
+    SELECT COUNT(*) AS total
+    FROM a_share_market_metric_rules
+  `).get()?.total || 0);
+  if (total <= 0) return;
+
+  const defaults = connection.prepare(`
+    SELECT id
+    FROM a_share_market_metric_rules
+    WHERE scope_key = 'ALL_A' AND is_default = 1
+    ORDER BY is_enabled DESC, updated_at DESC, id DESC
+  `).all();
+
+  const pickRow = defaults[0] || connection.prepare(`
+    SELECT id
+    FROM a_share_market_metric_rules
+    WHERE scope_key = 'ALL_A'
+    ORDER BY (rule_key = 'ALL_A_CLOSE_RAW_V1') DESC, is_enabled DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `).get();
+
+  if (pickRow?.id) {
+    const tx = connection.transaction(() => {
+      connection.prepare(`
+        UPDATE a_share_market_metric_rules
+        SET is_default = 0
+        WHERE scope_key = 'ALL_A'
+          AND id != @id
+          AND is_default = 1
+      `).run({ id: pickRow.id });
+      connection.prepare(`
+        UPDATE a_share_market_metric_rules
+        SET is_default = 1
+        WHERE id = @id
+      `).run({ id: pickRow.id });
+    });
+    tx();
+  }
+
+  connection.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_a_share_metric_rules_scope_default
+      ON a_share_market_metric_rules (scope_key)
+      WHERE is_default = 1;
+  `);
+}
+
 function ensureMigrations(connection) {
   if (!hasColumn(connection, 'backtest_results', 'tp_hit')) {
     connection.exec('ALTER TABLE backtest_results ADD COLUMN tp_hit INTEGER DEFAULT 0');
@@ -1193,6 +1286,7 @@ function ensureMigrations(connection) {
     }
   }
 
+  ensureMarketMetricRuleDefaults(connection);
   migrateLegacyMonitorConfig(connection);
   migrateLegacyStockDailyBars(connection);
   normalizeStockEodBarsForTradeDayUniq(connection);
@@ -1225,6 +1319,20 @@ function seedDefaults(connection) {
     items.forEach((item) => insertConfig.run(item));
   });
   tx(DEFAULT_SYSTEM_CONFIGS);
+
+  connection.prepare(`
+    INSERT INTO a_share_market_metric_rules (
+      rule_key, name, scope_key, price_mode,
+      exclude_suspended, min_listing_trading_days, include_st,
+      min_sample_size, is_enabled, is_default, created_at, updated_at
+    )
+    VALUES (
+      'ALL_A_CLOSE_RAW_V1', '全A不复权收盘价V1', 'ALL_A', 'close_raw',
+      1, 0, 1,
+      1, 1, 1, datetime('now'), datetime('now')
+    )
+    ON CONFLICT(rule_key) DO NOTHING
+  `).run();
 
   connection.prepare(`
     INSERT INTO monitor_categories (name, description, sort_order, is_enabled, created_at, updated_at)

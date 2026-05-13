@@ -295,3 +295,46 @@
 ## 12. 用量
 
 - `GET /usage/summary?period=7d`
+
+## 13. A股市场统计指标
+
+- `GET /market-metrics/rules`
+- `POST /market-metrics/rules`
+  ```json
+  {
+    "ruleKey": "ALL_A_CLOSE_RAW_V1",
+    "name": "全A不复权收盘价V1",
+    "scopeKey": "ALL_A",
+    "priceMode": "close_raw",
+    "excludeSuspended": true,
+    "minListingTradingDays": 60,
+    "includeSt": true,
+    "minSampleSize": 100
+  }
+  ```
+- `PUT /market-metrics/rules/:ruleId`
+- `GET /market-metrics/daily?tradeDay=2026-05-12&scopeKey=ALL_A`
+- `GET /market-metrics/daily/range?startDay=2026-01-01&endDay=2026-05-12&scopeKey=ALL_A`
+- `POST /market-metrics/compute`
+  ```json
+  {
+    "tradeDay": "2026-05-12",
+    "ruleKey": "ALL_A_CLOSE_RAW_V1",
+    "force": false
+  }
+  ```
+
+指标查询响应核心字段示例：
+
+```json
+{
+  "tradeDay": "2026-05-12",
+  "ruleKey": "ALL_A_CLOSE_RAW_V1",
+  "scopeKey": "ALL_A",
+  "priceMode": "close_raw",
+  "avgPrice": 12.83,
+  "medianPrice": 8.47,
+  "sampleSize": 5120,
+  "computedAt": "2026-05-12T16:05:00+08:00"
+}
+```

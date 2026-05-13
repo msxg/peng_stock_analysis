@@ -1402,3 +1402,86 @@ CREATE INDEX IF NOT EXISTS idx_market_quality_reports_dataset
 -- 索引：按范围查询巡检报告
 CREATE INDEX IF NOT EXISTS idx_market_quality_reports_scope
   ON market_data_quality_reports (scope_type, scope_key, generated_at DESC, id DESC);
+
+-- =====================================
+-- 模块：A股市场统计指标
+-- =====================================
+
+-- 表：a_share_market_metric_rules
+-- 说明：A股市场统计指标规则主表
+CREATE TABLE IF NOT EXISTS a_share_market_metric_rules (
+  -- 主键ID
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 规则唯一键
+  rule_key TEXT NOT NULL UNIQUE,
+  -- 规则名称
+  name TEXT NOT NULL,
+  -- 样本范围键，V1 固定 ALL_A
+  scope_key TEXT NOT NULL DEFAULT 'ALL_A',
+  -- 价格口径：close_raw/close_qfq/close_hfq
+  price_mode TEXT NOT NULL DEFAULT 'close_raw',
+  -- 是否剔除当日停牌：0-否，1-是
+  exclude_suspended INTEGER NOT NULL DEFAULT 1,
+  -- 最少上市交易日门槛，0 表示不过滤
+  min_listing_trading_days INTEGER NOT NULL DEFAULT 0,
+  -- 是否包含 ST：0-否，1-是
+  include_st INTEGER NOT NULL DEFAULT 1,
+  -- 最低有效样本数
+  min_sample_size INTEGER NOT NULL DEFAULT 1,
+  -- 是否启用：0-否，1-是
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  -- 是否默认规则：0-否，1-是（同一 scope_key 仅允许一条）
+  is_default INTEGER NOT NULL DEFAULT 0,
+  -- 创建时间
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 更新时间
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 索引：按启用状态和更新时间查询规则
+CREATE INDEX IF NOT EXISTS idx_a_share_metric_rules_enabled_updated
+  ON a_share_market_metric_rules (is_enabled, updated_at DESC, id DESC);
+
+-- 唯一索引：同一 scope_key 只允许一条默认规则
+CREATE UNIQUE INDEX IF NOT EXISTS uq_a_share_metric_rules_scope_default
+  ON a_share_market_metric_rules (scope_key)
+  WHERE is_default = 1;
+
+-- 表：a_share_market_metrics_daily
+-- 说明：A股市场统计指标按交易日沉淀快照表
+CREATE TABLE IF NOT EXISTS a_share_market_metrics_daily (
+  -- 主键ID
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 交易日
+  trade_day TEXT NOT NULL,
+  -- 规则ID
+  rule_id INTEGER NOT NULL,
+  -- 规则键快照
+  rule_key_snapshot TEXT NOT NULL,
+  -- 样本范围键
+  scope_key TEXT NOT NULL,
+  -- 价格口径
+  price_mode TEXT NOT NULL,
+  -- 平均股价
+  avg_price REAL,
+  -- 中位数股价
+  median_price REAL,
+  -- 样本数
+  sample_size INTEGER NOT NULL DEFAULT 0,
+  -- 来源数据集
+  source_dataset TEXT NOT NULL DEFAULT 'stock_eod_bars',
+  -- 指标计算时间
+  computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 创建时间
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (rule_id) REFERENCES a_share_market_metric_rules(id) ON DELETE CASCADE,
+  UNIQUE (trade_day, rule_id, scope_key)
+);
+
+-- 索引：按范围和交易日查询市场指标
+CREATE INDEX IF NOT EXISTS idx_a_share_metrics_daily_scope_day
+  ON a_share_market_metrics_daily (scope_key, trade_day DESC, id DESC);
+
+-- 索引：按规则和交易日查询市场指标
+CREATE INDEX IF NOT EXISTS idx_a_share_metrics_daily_rule_day
+  ON a_share_market_metrics_daily (rule_id, trade_day DESC, id DESC);
