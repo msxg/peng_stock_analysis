@@ -2,7 +2,8 @@
 -- 说明：
 -- 1. SQLite 不支持 MySQL 风格的 COMMENT 语法
 -- 2. 本文件通过标准 SQL 注释（--）为表和字段补充说明
--- 3. 可直接用于 SQLite 建库执行
+-- 3. 当前文件表达的是目标设计稿，不代表 src/ 中现有实现已经全部完成
+-- 4. 目标模型采用“股票/期货分表、日内/EOD分层、派生粒度按需物化”的设计
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -258,62 +259,8 @@ CREATE TABLE IF NOT EXISTS portfolio_corporate_actions (
 );
 
 -- =====================================
--- 模块：期货监测
+-- 模块：期货基础资料与行情事实
 -- =====================================
-
--- 表：futures_categories
--- 说明：期货监测分类
-CREATE TABLE IF NOT EXISTS futures_categories (
-  -- 主键ID
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  -- 分类名称，唯一
-  name TEXT NOT NULL UNIQUE,
-  -- 分类描述
-  description TEXT,
-  -- 排序值
-  sort_order INTEGER NOT NULL DEFAULT 100,
-  -- 是否启用：0-否，1-是
-  is_enabled INTEGER NOT NULL DEFAULT 1,
-  -- 创建时间
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  -- 更新时间
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- 表：futures_symbols
--- 说明：期货分类下的监测标的
-CREATE TABLE IF NOT EXISTS futures_symbols (
-  -- 主键ID
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  -- 分类ID
-  category_id INTEGER NOT NULL,
-  -- 展示名称
-  name TEXT NOT NULL,
-  -- 行情代码
-  quote_code TEXT NOT NULL,
-  -- 市场编号
-  market INTEGER NOT NULL,
-  -- 合约代码
-  code TEXT NOT NULL,
-  -- 排序值
-  sort_order INTEGER NOT NULL DEFAULT 100,
-  -- 是否激活：0-否，1-是
-  is_active INTEGER NOT NULL DEFAULT 1,
-  -- 创建时间
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  -- 更新时间
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (category_id) REFERENCES futures_categories(id) ON DELETE CASCADE,
-  UNIQUE (category_id, market, code)
-);
-
--- 索引：按分类读取期货标的
-CREATE INDEX IF NOT EXISTS idx_futures_symbols_category
-  ON futures_symbols (category_id, sort_order ASC, id ASC);
-
--- 索引：按激活状态读取期货标的
-CREATE INDEX IF NOT EXISTS idx_futures_symbols_active
-  ON futures_symbols (is_active, sort_order ASC, id ASC);
 
 -- 表：futures_basics
 -- 说明：期货基础资料缓存
@@ -343,11 +290,11 @@ CREATE INDEX IF NOT EXISTS idx_futures_basics_code
   ON futures_basics (code);
 
 -- 表：futures_intraday_bars
--- 说明：期货分时/分钟K线数据
+-- 说明：期货日内K线基础表，初期至少保存 1m，后续可按需物化 5m/15m/30m/60m
 CREATE TABLE IF NOT EXISTS futures_intraday_bars (
   -- 行情代码
   quote_code TEXT NOT NULL,
-  -- 周期，例如 1m/5m
+  -- 周期，例如 1m/5m/15m/30m/60m
   timeframe TEXT NOT NULL,
   -- 交易日
   trade_day TEXT NOT NULL,
@@ -376,12 +323,50 @@ CREATE TABLE IF NOT EXISTS futures_intraday_bars (
   PRIMARY KEY (quote_code, timeframe, bucket_ts)
 );
 
--- 索引：按合约、周期、交易日和时间桶查询K线
-CREATE INDEX IF NOT EXISTS idx_futures_intraday_lookup
+-- 索引：按合约、周期、交易日和时间桶查询期货日内K线
+CREATE INDEX IF NOT EXISTS idx_futures_intraday_bars_lookup
   ON futures_intraday_bars (quote_code, timeframe, trade_day, bucket_ts ASC);
 
+-- 表：futures_eod_bars
+-- 说明：期货日线及以上K线基础表，初期至少保存 1d，后续可按需物化 1w/1M/1Y
+CREATE TABLE IF NOT EXISTS futures_eod_bars (
+  -- 行情代码
+  quote_code TEXT NOT NULL,
+  -- 周期，例如 1d/1w/1M/1Y
+  timeframe TEXT NOT NULL,
+  -- 周期结束所对应的交易日
+  trade_day TEXT NOT NULL,
+  -- 时间桶时间戳；日线通常可取交易日0点时间戳
+  bucket_ts INTEGER NOT NULL,
+  -- 行情时间文本
+  date TEXT NOT NULL,
+  -- 开盘价
+  open REAL,
+  -- 最高价
+  high REAL,
+  -- 最低价
+  low REAL,
+  -- 收盘价
+  close REAL,
+  -- 成交量
+  volume REAL NOT NULL DEFAULT 0,
+  -- 成交额
+  amount REAL NOT NULL DEFAULT 0,
+  -- 数据来源
+  source TEXT,
+  -- 创建时间
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 更新时间
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (quote_code, timeframe, bucket_ts)
+);
+
+-- 索引：按合约、周期和结束交易日查询期货EOD K线
+CREATE INDEX IF NOT EXISTS idx_futures_eod_bars_lookup
+  ON futures_eod_bars (quote_code, timeframe, trade_day, bucket_ts ASC);
+
 -- =====================================
--- 模块：股票基础资料与行情监测
+-- 模块：股票基础资料与统一监控配置
 -- =====================================
 
 -- 表：stock_basics
@@ -442,9 +427,9 @@ CREATE INDEX IF NOT EXISTS idx_stock_basics_market_code
 CREATE INDEX IF NOT EXISTS idx_stock_basics_name
   ON stock_basics (name);
 
--- 表：stock_monitor_categories
--- 说明：股票行情监测分类
-CREATE TABLE IF NOT EXISTS stock_monitor_categories (
+-- 表：monitor_categories
+-- 说明：统一监控分类主表，可同时服务股票、期货、指数等监控对象
+CREATE TABLE IF NOT EXISTS monitor_categories (
   -- 主键ID
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   -- 分类名称，唯一
@@ -461,19 +446,25 @@ CREATE TABLE IF NOT EXISTS stock_monitor_categories (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- 表：stock_monitor_symbols
--- 说明：股票监测分类下的股票列表
-CREATE TABLE IF NOT EXISTS stock_monitor_symbols (
+-- 表：monitor_symbols
+-- 说明：统一监控标的配置表
+CREATE TABLE IF NOT EXISTS monitor_symbols (
   -- 主键ID
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   -- 分类ID
   category_id INTEGER NOT NULL,
-  -- 展示名称
-  name TEXT NOT NULL,
-  -- 股票代码
-  stock_code TEXT NOT NULL,
+  -- 业务代码，例如 600519 / CU2509
+  symbol_code TEXT NOT NULL,
+  -- 行情代码，例如 225.LC2605
+  quote_code TEXT,
+  -- 标的类型：stock/futures/index
+  symbol_type TEXT NOT NULL,
   -- 市场标识
   market TEXT NOT NULL,
+  -- 交易所
+  exchange TEXT,
+  -- 展示名称
+  display_name TEXT NOT NULL,
   -- 排序值
   sort_order INTEGER NOT NULL DEFAULT 100,
   -- 是否激活：0-否，1-是
@@ -482,17 +473,17 @@ CREATE TABLE IF NOT EXISTS stock_monitor_symbols (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   -- 更新时间
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (category_id) REFERENCES stock_monitor_categories(id) ON DELETE CASCADE,
-  UNIQUE (category_id, market, stock_code)
+  FOREIGN KEY (category_id) REFERENCES monitor_categories(id) ON DELETE CASCADE,
+  UNIQUE (category_id, symbol_type, market, symbol_code)
 );
 
--- 索引：按分类读取股票监测标的
-CREATE INDEX IF NOT EXISTS idx_stock_monitor_symbols_category
-  ON stock_monitor_symbols (category_id, sort_order ASC, id ASC);
+-- 索引：按分类读取监控标的
+CREATE INDEX IF NOT EXISTS idx_monitor_symbols_category
+  ON monitor_symbols (category_id, sort_order ASC, id ASC);
 
--- 索引：按激活状态读取股票监测标的
-CREATE INDEX IF NOT EXISTS idx_stock_monitor_symbols_active
-  ON stock_monitor_symbols (is_active, sort_order ASC, id ASC);
+-- 索引：按激活状态读取监控标的
+CREATE INDEX IF NOT EXISTS idx_monitor_symbols_active
+  ON monitor_symbols (is_active, sort_order ASC, id ASC);
 
 -- =====================================
 -- 模块：蓝筹模式与标的池
@@ -1132,20 +1123,92 @@ CREATE INDEX IF NOT EXISTS idx_news_ai_digests_lookup
   ON news_ai_digests (digest_type, scope_type, scope_key, generated_at DESC, id DESC);
 
 -- =====================================
--- 模块：本地股票日线缓存
+-- 模块：本地股票K线缓存
 -- =====================================
 
--- 表：stock_daily_bars
--- 说明：A股股票日线本地缓存表，优先服务蓝筹模式和批量历史分析
-CREATE TABLE IF NOT EXISTS stock_daily_bars (
+-- 表：stock_intraday_bars
+-- 说明：股票日内K线基础表，初期至少保存 1m，后续可按需物化 5m/15m/30m/60m
+CREATE TABLE IF NOT EXISTS stock_intraday_bars (
   -- 主键ID
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   -- 股票代码
   stock_code TEXT NOT NULL,
+  -- 市场标识，例如 A/HK/US
+  market TEXT,
   -- Tushare风格代码，例如 600519.SH
-  ts_code TEXT NOT NULL,
-  -- 交易日期
-  trade_date TEXT NOT NULL,
+  ts_code TEXT,
+  -- 时间粒度，例如 1m/5m/15m/30m/60m
+  timeframe TEXT NOT NULL,
+  -- 交易日
+  trade_day TEXT NOT NULL,
+  -- 时间桶时间戳
+  bucket_ts INTEGER NOT NULL,
+  -- 行情时间文本
+  date TEXT NOT NULL,
+  -- 开盘价
+  open REAL,
+  -- 最高价
+  high REAL,
+  -- 最低价
+  low REAL,
+  -- 收盘价
+  close REAL,
+  -- 前收盘价
+  pre_close REAL,
+  -- 涨跌额
+  change REAL,
+  -- 涨跌幅
+  pct_chg REAL,
+  -- 成交量
+  vol REAL,
+  -- 成交额
+  amount REAL,
+  -- 数据来源
+  source TEXT NOT NULL DEFAULT 'tushare.pro_bar',
+  -- 最近同步时间
+  synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 创建时间
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 更新时间
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (stock_code, timeframe, bucket_ts)
+);
+
+-- 索引：按股票代码、周期、交易日和时间桶查询股票日内K线
+CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_lookup
+  ON stock_intraday_bars (stock_code, timeframe, trade_day, bucket_ts ASC);
+-- 索引：按粒度+交易日快速过滤股票日内K线
+CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day
+  ON stock_intraday_bars (timeframe, trade_day);
+-- 索引：按粒度+交易日范围并按时间倒序查询（行情明细分页）
+CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_desc_bucket_code
+  ON stock_intraday_bars (timeframe, trade_day DESC, bucket_ts DESC, stock_code ASC);
+-- 索引：按粒度+交易日范围+时间查询（日内分析）
+CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_bucket_code
+  ON stock_intraday_bars (timeframe, trade_day, bucket_ts DESC, stock_code ASC);
+-- 索引：按粒度+交易日+代码聚合（完整性概览）
+CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_code
+  ON stock_intraday_bars (timeframe, trade_day, stock_code);
+
+-- 表：stock_eod_bars
+-- 说明：股票日线及以上K线基础表，初期至少保存 1d，后续可按需物化 1w/1M/1Y
+CREATE TABLE IF NOT EXISTS stock_eod_bars (
+  -- 主键ID
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 股票代码
+  stock_code TEXT NOT NULL,
+  -- 市场标识，例如 A/HK/US
+  market TEXT,
+  -- Tushare风格代码，例如 600519.SH
+  ts_code TEXT,
+  -- 时间粒度，例如 1d/1w/1M/1Y
+  timeframe TEXT NOT NULL,
+  -- 周期结束所对应的交易日
+  trade_day TEXT NOT NULL,
+  -- 时间桶时间戳；日线通常可取交易日0点时间戳
+  bucket_ts INTEGER NOT NULL,
+  -- 行情时间文本
+  date TEXT NOT NULL,
   -- 开盘价
   open REAL,
   -- 最高价
@@ -1172,9 +1235,170 @@ CREATE TABLE IF NOT EXISTS stock_daily_bars (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   -- 更新时间
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (stock_code, trade_date)
+  -- 保证同一股票、同一周期、同一交易日仅一条
+  UNIQUE (stock_code, timeframe, trade_day)
 );
 
--- 索引：按股票代码和交易日期倒序查询本地日线
-CREATE INDEX IF NOT EXISTS idx_stock_daily_bars_code_date
-  ON stock_daily_bars (stock_code, trade_date DESC);
+-- 索引：按股票代码、周期和结束交易日查询股票EOD K线
+CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_lookup
+  ON stock_eod_bars (stock_code, timeframe, trade_day, bucket_ts ASC);
+-- 索引：按粒度+交易日快速过滤股票EOD K线
+CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day
+  ON stock_eod_bars (timeframe, trade_day);
+-- 索引：按粒度+交易日范围并按时间倒序查询（行情明细分页）
+CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_desc_bucket_code
+  ON stock_eod_bars (timeframe, trade_day DESC, bucket_ts DESC, stock_code ASC);
+-- 索引：按粒度+交易日范围+时间查询（EOD分析）
+CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_bucket_code
+  ON stock_eod_bars (timeframe, trade_day, bucket_ts DESC, stock_code ASC);
+-- 索引：按粒度+交易日+代码聚合（完整性概览）
+CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_code
+  ON stock_eod_bars (timeframe, trade_day, stock_code);
+
+-- =====================================
+-- 模块：市场数据治理
+-- =====================================
+
+-- 表：market_sync_jobs
+-- 说明：市场数据同步、补数、刷新、巡检任务主表
+CREATE TABLE IF NOT EXISTS market_sync_jobs (
+  -- 主键ID
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 任务类型：sync/repair/refresh/quality
+  job_type TEXT NOT NULL,
+  -- 触发方式：schedule/manual/query/system
+  trigger_type TEXT NOT NULL,
+  -- 市场范围：stock/futures/both
+  market_scope TEXT NOT NULL,
+  -- 数据集范围，例如 stock_eod_bars
+  dataset_scope TEXT,
+  -- 标的类型：stock/futures/index
+  symbol_type TEXT,
+  -- 时间粒度
+  timeframe TEXT,
+  -- 范围开始日期
+  start_date TEXT,
+  -- 范围结束日期
+  end_date TEXT,
+  -- 任务状态
+  status TEXT NOT NULL,
+  -- 发起人
+  requested_by TEXT,
+  -- 参数快照JSON
+  params_json TEXT,
+  -- 结果摘要JSON
+  summary_json TEXT,
+  -- 开始时间
+  started_at TEXT,
+  -- 完成时间
+  finished_at TEXT,
+  -- 创建时间
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 更新时间
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 索引：按任务状态和创建时间查询
+CREATE INDEX IF NOT EXISTS idx_market_sync_jobs_status
+  ON market_sync_jobs (status, created_at DESC, id DESC);
+
+-- 索引：按任务类型和创建时间查询
+CREATE INDEX IF NOT EXISTS idx_market_sync_jobs_type_created
+  ON market_sync_jobs (job_type, created_at DESC, id DESC);
+
+-- 表：market_sync_job_items
+-- 说明：市场数据同步任务子项表
+CREATE TABLE IF NOT EXISTS market_sync_job_items (
+  -- 主键ID
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 关联任务ID
+  job_id INTEGER NOT NULL,
+  -- 业务代码
+  symbol_code TEXT,
+  -- 行情代码
+  quote_code TEXT,
+  -- 标的类型
+  symbol_type TEXT,
+  -- 市场标识
+  market TEXT,
+  -- 时间粒度
+  timeframe TEXT,
+  -- 范围开始
+  range_start TEXT,
+  -- 范围结束
+  range_end TEXT,
+  -- 使用的数据源
+  source_provider TEXT,
+  -- 子项状态
+  status TEXT NOT NULL,
+  -- 写入bar数量
+  bars_written INTEGER NOT NULL DEFAULT 0,
+  -- 错误码
+  error_code TEXT,
+  -- 错误信息
+  error_message TEXT,
+  -- 开始时间
+  started_at TEXT,
+  -- 完成时间
+  finished_at TEXT,
+  -- 创建时间
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 更新时间
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (job_id) REFERENCES market_sync_jobs(id) ON DELETE CASCADE
+);
+
+-- 索引：按任务查询子项
+CREATE INDEX IF NOT EXISTS idx_market_sync_job_items_job
+  ON market_sync_job_items (job_id, id ASC);
+
+-- 索引：按子项状态查询
+CREATE INDEX IF NOT EXISTS idx_market_sync_job_items_status
+  ON market_sync_job_items (status, created_at DESC, id DESC);
+
+-- 表：market_data_quality_reports
+-- 说明：市场数据质量巡检结果表
+CREATE TABLE IF NOT EXISTS market_data_quality_reports (
+  -- 主键ID
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 数据集名称
+  dataset_name TEXT NOT NULL,
+  -- 标的类型
+  symbol_type TEXT,
+  -- 市场标识
+  market TEXT,
+  -- 时间粒度
+  timeframe TEXT NOT NULL,
+  -- 范围类型：market/symbol/range
+  scope_type TEXT NOT NULL,
+  -- 范围键
+  scope_key TEXT,
+  -- 开始日期
+  start_date TEXT,
+  -- 结束日期
+  end_date TEXT,
+  -- 期望总条数
+  total_expected INTEGER NOT NULL DEFAULT 0,
+  -- 实际总条数
+  total_actual INTEGER NOT NULL DEFAULT 0,
+  -- 缺口数量
+  gap_count INTEGER NOT NULL DEFAULT 0,
+  -- 异常数量
+  anomaly_count INTEGER NOT NULL DEFAULT 0,
+  -- 覆盖率
+  coverage_ratio REAL,
+  -- 巡检结果JSON
+  report_json TEXT,
+  -- 生成时间
+  generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 创建时间
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 索引：按数据集、粒度和生成时间查询巡检报告
+CREATE INDEX IF NOT EXISTS idx_market_quality_reports_dataset
+  ON market_data_quality_reports (dataset_name, timeframe, generated_at DESC, id DESC);
+
+-- 索引：按范围查询巡检报告
+CREATE INDEX IF NOT EXISTS idx_market_quality_reports_scope
+  ON market_data_quality_reports (scope_type, scope_key, generated_at DESC, id DESC);

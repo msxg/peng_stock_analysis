@@ -49,6 +49,8 @@ export const env = {
   TUSHARE_TOKEN: process.env.TUSHARE_TOKEN || '',
   TUSHARE_BASE_URL: process.env.TUSHARE_BASE_URL || 'https://api.tushare.pro',
   TUSHARE_WEB_COOKIE: process.env.TUSHARE_WEB_COOKIE || '',
+  STOCK_DAILY_MULTI_SOURCE_FALLBACK: process.env.STOCK_DAILY_MULTI_SOURCE_FALLBACK || 'false',
+  TUSHARE_DAILY_MIN_INTERVAL_MS: Number(process.env.TUSHARE_DAILY_MIN_INTERVAL_MS || 1300),
   XUEQIU_BASE_URL: process.env.XUEQIU_BASE_URL || 'https://xueqiu.com',
   XUEQIU_WEB_COOKIE: process.env.XUEQIU_WEB_COOKIE || '',
   XUEQIU_REFERER: process.env.XUEQIU_REFERER || 'https://xueqiu.com/',

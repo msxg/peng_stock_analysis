@@ -290,12 +290,13 @@ export function BluechipAnalysisHistoryPanel() {
                   <th className="px-3 py-2 text-right">价格</th>
                   <th className="px-3 py-2 text-left">原因</th>
                   <th className="px-3 py-2 text-left">批次ID</th>
+                  <th className="px-3 py-2 text-left">查看分析</th>
                 </tr>
               </thead>
               <tbody>
                 {!signalsData.items.length ? (
                   <tr>
-                    <td className="px-3 py-4 text-center text-muted-foreground" colSpan={9}>暂无数据</td>
+                    <td className="px-3 py-4 text-center text-muted-foreground" colSpan={10}>暂无数据</td>
                   </tr>
                 ) : null}
                 {signalsData.items.map((item) => (
@@ -311,6 +312,19 @@ export function BluechipAnalysisHistoryPanel() {
                     <td className="px-3 py-2 text-right">{Number.isFinite(Number(item.signalPrice)) ? Number(item.signalPrice).toFixed(2) : '--'}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">{item.signalReason || '--'}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.batchId}</td>
+                    <td className="px-3 py-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!item.stockCode}
+                        onClick={() => {
+                          const link = `/bluechip-mode?code=${encodeURIComponent(item.stockCode || '')}`;
+                          window.open(link, '_blank', 'noopener,noreferrer');
+                        }}
+                      >
+                        查看分析
+                      </Button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

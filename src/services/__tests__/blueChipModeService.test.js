@@ -92,6 +92,49 @@ test('takeProfitPct parameter should change sell trigger timing', () => {
   assert.ok(!loose.signals.some((item) => item.type === 'take_profit'));
 });
 
+test('summary should include totalReturnPct as sum of closed-trade pnl', () => {
+  const indexHistory = [
+    row('2026-02-01', 100, 101, 99, 100),
+    row('2026-02-02', 100, 101, 99, 100),
+    row('2026-02-03', 100, 101, 99, 100),
+    row('2026-02-04', 100, 101, 99, 100),
+    row('2026-02-05', 100, 101, 99, 100),
+    row('2026-02-06', 100, 101, 99, 100),
+    row('2026-02-07', 100, 101, 99, 100),
+    row('2026-02-08', 100, 101, 99, 100),
+  ];
+
+  const stockHistory = [
+    row('2026-02-01', 10.0, 10.1, 9.9, 10.0),
+    row('2026-02-02', 8.0, 8.1, 7.9, 8.0),
+    row('2026-02-03', 8.0, 8.6, 7.9, 8.5), // 第一次独立起涨买点
+    row('2026-02-04', 8.5, 9.1, 8.4, 9.0), // 第一次止盈卖点
+    row('2026-02-05', 9.4, 9.5, 9.2, 9.4),
+    row('2026-02-06', 7.2, 7.3, 7.0, 7.2),
+    row('2026-02-07', 7.2, 7.8, 7.1, 7.6), // 第二次独立起涨买点
+    row('2026-02-08', 7.6, 8.1, 7.5, 8.0), // 第二次止盈卖点
+  ];
+
+  const analysis = buildBlueChipModeAnalysis({
+    stockCode: 'SH600000',
+    indexCode: 'SH000300',
+    stockHistory,
+    indexHistory,
+    params: {
+      takeProfitPct: 5,
+      stopLossPct: 20,
+      failPrevHighDays: 60,
+    },
+  });
+
+  const expectedTotal = Number(
+    analysis.trades.reduce((sum, item) => sum + Number(item.pnlPct || 0), 0).toFixed(2),
+  );
+
+  assert.equal(analysis.summary.trades, 2);
+  assert.equal(analysis.summary.totalReturnPct, expectedTotal);
+});
+
 test('buildBlueChipModeAnalysis should not generate buy signals without an index start-buy trigger', () => {
   const indexHistory = [
     row('2026-03-01', 100, 101, 99, 100),

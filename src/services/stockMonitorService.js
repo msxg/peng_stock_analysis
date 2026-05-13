@@ -4,6 +4,7 @@ import { stockBasicsRepository } from '../repositories/stockBasicsRepository.js'
 import { stockMonitorRepository } from '../repositories/stockMonitorRepository.js';
 import { stockDataService } from './stockDataService.js';
 import { futuresService } from './futuresService.js';
+import { marketQueryService } from './marketQueryService.js';
 import { nowLocalDateTime, toLocalDateTime } from '../utils/date.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -771,6 +772,38 @@ async function fetchStockIntraday1mSeries(stockCode, limit = 120) {
 async function getStockMonitorSeries(stockCode, timeframe = '1m', limit = 120) {
   const tf = String(timeframe || '1m');
   const normalizedLimit = Math.max(Number(limit) || 120, 20);
+  const localTimeframe = tf === '30s' ? '1m' : tf;
+
+  const localResult = await marketQueryService.querySeries({
+    symbolType: 'stock',
+    symbol: stockCode,
+    timeframe: localTimeframe,
+    limit: Math.max(normalizedLimit * (tf === '30s' ? 2 : 1), normalizedLimit),
+    allowRefresh: true,
+  });
+
+  const localCandles = (localResult.rows || [])
+    .map((item) => ({
+      date: item.date,
+      open: Number(item.open || 0),
+      high: Number(item.high || 0),
+      low: Number(item.low || 0),
+      close: Number(item.close || 0),
+      volume: Number(item.volume ?? item.vol ?? 0),
+      amount: Number(item.amount ?? 0),
+    }))
+    .filter((item) => Number.isFinite(item.close) && item.close > 0);
+
+  if (localCandles.length) {
+    return {
+      candles: localCandles.slice(-normalizedLimit),
+      candleDataSource: localResult.source || 'local.query',
+      warning: tf === '30s'
+        ? '30秒K线暂使用1分钟数据近似'
+        : null,
+    };
+  }
+
   if (Object.prototype.hasOwnProperty.call(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES, tf)) {
     if (tf === '1m') {
       return fetchStockIntraday1mSeries(stockCode, normalizedLimit);

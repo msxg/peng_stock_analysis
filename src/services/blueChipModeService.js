@@ -336,11 +336,13 @@ export function buildBlueChipModeAnalysis({
   });
 
   const markers = signals.map(createMarker).filter(Boolean);
+  const totalReturnPct = trades.reduce((sum, item) => sum + Number(item.pnlPct || 0), 0);
   const summary = {
     trades: trades.length,
     wins: trades.filter((item) => Number(item.pnlPct) > 0).length,
     losses: trades.filter((item) => Number(item.pnlPct) <= 0).length,
-    avgReturnPct: round(trades.reduce((sum, item) => sum + Number(item.pnlPct || 0), 0) / (trades.length || 1)),
+    totalReturnPct: round(totalReturnPct),
+    avgReturnPct: round(totalReturnPct / (trades.length || 1)),
     winRatePct: round((trades.filter((item) => Number(item.pnlPct) > 0).length / (trades.length || 1)) * 100),
     openPosition: position
       ? {

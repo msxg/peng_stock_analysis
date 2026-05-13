@@ -152,6 +152,12 @@ function getSignedToneStyle(value) {
   return undefined;
 }
 
+function getProfitToneStyle(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  return n > 0 ? { color: '#dc2626' } : { color: '#16a34a' };
+}
+
 function extractStockCode(input = '') {
   const text = String(input || '').trim().toUpperCase();
   if (!text) return '';
@@ -686,22 +692,30 @@ export function BluechipModePanel() {
               <CardTitle>策略摘要</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 md:grid-cols-4">
-                <div className="rounded-lg border border-border/70 px-3 py-2">
+              <div className="flex flex-wrap gap-3">
+                <div className="min-w-[170px] flex-1 rounded-lg border border-border/70 px-3 py-2">
                   <div className="text-xs text-muted-foreground">板块类型</div>
                   <div className="text-sm font-semibold">{boardType === 'growth' ? '创业/科创(20%)' : '主板(10%)'}</div>
                 </div>
-                <div className="rounded-lg border border-border/70 px-3 py-2">
+                <div className="min-w-[150px] flex-1 rounded-lg border border-border/70 px-3 py-2">
                   <div className="text-xs text-muted-foreground">交易笔数</div>
                   <div className="text-sm font-semibold">{summary?.trades ?? 0}</div>
                 </div>
-                <div className="rounded-lg border border-border/70 px-3 py-2">
+                <div className="min-w-[150px] flex-1 rounded-lg border border-border/70 px-3 py-2">
                   <div className="text-xs text-muted-foreground">胜率</div>
                   <div className="text-sm font-semibold">{formatNum(summary?.winRatePct, 2)}%</div>
                 </div>
-                <div className="rounded-lg border border-border/70 px-3 py-2">
+                <div className="min-w-[150px] flex-1 rounded-lg border border-border/70 px-3 py-2">
                   <div className="text-xs text-muted-foreground">平均收益</div>
-                  <div className="text-sm font-semibold">{formatPct(summary?.avgReturnPct, 2)}</div>
+                  <div className="text-sm font-semibold" style={getProfitToneStyle(summary?.avgReturnPct)}>
+                    {formatPct(summary?.avgReturnPct, 2)}
+                  </div>
+                </div>
+                <div className="min-w-[150px] flex-1 rounded-lg border border-border/70 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">总收益</div>
+                  <div className="text-sm font-semibold" style={getProfitToneStyle(summary?.totalReturnPct)}>
+                    {formatPct(summary?.totalReturnPct, 2)}
+                  </div>
                 </div>
               </div>
               {thresholds ? (

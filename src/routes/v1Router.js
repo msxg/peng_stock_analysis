@@ -113,8 +113,12 @@ router.post('/system/validate', systemController.validateConfig);
 router.post('/system/test-llm', systemController.testLlmChannel);
 router.post('/system/test-email', asyncHandler(systemController.testEmail));
 router.get('/system/schema', systemController.getSchema);
+router.get('/system/market-data/query', marketDataController.query);
 router.get('/system/market-data', marketDataController.futuresIntraday);
+router.post('/system/market-data/sync-all', asyncHandler(marketDataController.sync));
 router.post('/system/market-data/sync', asyncHandler(marketDataController.syncFuturesIntraday));
+router.get('/system/market-data/jobs', marketDataController.jobs);
+router.get('/system/market-data/quality', marketDataController.quality);
 
 router.get('/usage/summary', usageController.summary);
 

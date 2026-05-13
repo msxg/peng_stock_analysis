@@ -1,10 +1,19 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { futuresRepository } from '../repositories/futuresRepository.js';
+import { stockBarsRepository } from '../repositories/stockBarsRepository.js';
+import { stockMonitorRepository } from '../repositories/stockMonitorRepository.js';
+import { stockBasicsRepository } from '../repositories/stockBasicsRepository.js';
+import { marketSyncJobRepository } from '../repositories/marketSyncJobRepository.js';
+import { marketQualityRepository } from '../repositories/marketQualityRepository.js';
+import { stockDataService } from './stockDataService.js';
 import { HttpError } from '../utils/httpError.js';
 
 const FUTURES_HISTORY_UT = 'fa5fd1943c7b386f172d6893dbfba10b';
 const execFileAsync = promisify(execFile);
+const OVERVIEW_SYMBOL_LIMIT = 50000;
+const LIGHT_OVERVIEW_MAX_SPAN_DAYS = 366;
+const LIGHT_OVERVIEW_MAX_TOTAL_BARS = 2000000;
 
 const INTRADAY_TIMEFRAME_SECONDS = {
   '30s': 30,
@@ -17,12 +26,18 @@ const INTRADAY_TIMEFRAME_SECONDS = {
   '1w': 7 * 86400,
   '1M': 30 * 86400,
 };
+const STOCK_DAILY_SYNC_MAX_RETRIES = 3;
 
-const SYNCABLE_TIMEFRAME_RULES = {
-  '1m': { klt: '1', periodDays: 1 / 1440, maxDays: 7, maxLmt: 20000, label: '分钟' },
-  '1d': { klt: '101', periodDays: 1, maxDays: 365 * 3, maxLmt: 8000, label: '日' },
-  '1w': { klt: '102', periodDays: 7, maxDays: 365 * 10, maxLmt: 8000, label: '周' },
-  '1M': { klt: '103', periodDays: 30, maxDays: 365 * 20, maxLmt: 8000, label: '月' },
+const SYNCABLE_RULES_BY_SYMBOL_TYPE = {
+  futures: {
+    '1m': { klt: '1', periodDays: 1 / 1440, maxDays: 7, maxLmt: 20000, label: '分钟', datasetScope: 'futures_intraday_bars' },
+    '1d': { klt: '101', periodDays: 1, maxLmt: 8000, label: '日', datasetScope: 'futures_eod_bars' },
+    '1w': { klt: '102', periodDays: 7, maxLmt: 8000, label: '周', datasetScope: 'futures_eod_bars' },
+    '1M': { klt: '103', periodDays: 30, maxLmt: 8000, label: '月', datasetScope: 'futures_eod_bars' },
+  },
+  stock: {
+    '1d': { klt: '101', periodDays: 1, maxLmt: 2000, label: '日', datasetScope: 'stock_eod_bars' },
+  },
 };
 
 function normalizeMarketDataTimeframe(input) {
@@ -42,6 +57,12 @@ function normalizeMarketDataTimeframe(input) {
     '1mon': '1M',
   };
   return aliasMap[key] || key;
+}
+
+function normalizeSymbolType(input) {
+  const text = String(input || 'futures').trim().toLowerCase();
+  if (text === 'stock') return 'stock';
+  return 'futures';
 }
 
 function toNum(value, fallback = 0) {
@@ -65,14 +86,14 @@ function calcMissingBarsBySpan(firstBucketTs, lastBucketTs, bars, intervalSecond
 }
 
 function attachGapMetrics(items = [], intervalSeconds = 60, order = 'desc') {
-  const lastTsByQuote = new Map();
+  const lastTsByCode = new Map();
   const normalizedOrder = String(order || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
   return items.map((item) => {
     const currentTs = Number(item.bucketTs);
     let gapSeconds = null;
     let gapBars = 0;
-    const quoteCode = String(item.quoteCode || '').trim().toUpperCase();
-    const prevTs = lastTsByQuote.get(quoteCode);
+    const codeKey = String(item.quoteCode || item.stockCode || '').trim().toUpperCase();
+    const prevTs = lastTsByCode.get(codeKey);
     if (Number.isFinite(prevTs) && Number.isFinite(currentTs)) {
       const delta = normalizedOrder === 'asc'
         ? (currentTs - prevTs)
@@ -84,7 +105,7 @@ function attachGapMetrics(items = [], intervalSeconds = 60, order = 'desc') {
         gapSeconds = delta;
       }
     }
-    lastTsByQuote.set(quoteCode, currentTs);
+    lastTsByCode.set(codeKey, currentTs);
     return {
       ...item,
       gapSeconds,
@@ -126,6 +147,16 @@ function addDays(date, days) {
   const d = new Date(date.getTime());
   d.setDate(d.getDate() + Number(days || 0));
   return d;
+}
+
+function sleep(ms = 0) {
+  const timeout = Math.max(0, Number(ms) || 0);
+  return new Promise((resolve) => setTimeout(resolve, timeout));
+}
+
+function isTushareRateLimitError(error) {
+  const message = String(error?.message || '');
+  return message.includes('code=40203') || message.includes('频率超限');
 }
 
 function dateToCompact(dayText) {
@@ -305,18 +336,38 @@ async function requestJson(url, timeoutMs = 9000) {
   }
 }
 
-function dedupeSymbols(items = []) {
+function dedupeSymbols(items = [], key = 'quoteCode') {
   return Array.from(new Map(
-    (items || []).map((item) => [String(item.quoteCode || '').trim().toUpperCase(), item]),
-  ).values()).filter((item) => item.quoteCode);
+    (items || []).map((item) => [String(item[key] || '').trim().toUpperCase(), item]),
+  ).values()).filter((item) => item[key]);
 }
 
-function resolveSymbolsForSync(quoteCodeFilter = '') {
+function isLikelyAStockCode(code = '') {
+  const text = String(code || '').trim().toUpperCase();
+  if (!/^\d{6}$/.test(text)) return false;
+  return (
+    text.startsWith('000')
+    || text.startsWith('001')
+    || text.startsWith('002')
+    || text.startsWith('003')
+    || text.startsWith('300')
+    || text.startsWith('301')
+    || text.startsWith('600')
+    || text.startsWith('601')
+    || text.startsWith('603')
+    || text.startsWith('605')
+    || text.startsWith('688')
+    || text.startsWith('689')
+  );
+}
+
+function resolveFuturesSymbolsForSync(quoteCodeFilter = '') {
   const configured = dedupeSymbols(
     futuresRepository.listSymbols({ onlyActive: true }).map((item) => ({
       quoteCode: String(item.quoteCode || '').trim().toUpperCase(),
       name: item.name || '',
     })),
+    'quoteCode',
   );
 
   const filterText = String(quoteCodeFilter || '').trim().toUpperCase();
@@ -341,16 +392,56 @@ function resolveSymbolsForSync(quoteCodeFilter = '') {
   }
 
   if (normalized && !matched.some((item) => item.quoteCode === normalized.quoteCode)) {
-    matched.push({
-      quoteCode: normalized.quoteCode,
-      name: normalized.code,
-    });
+    matched.push({ quoteCode: normalized.quoteCode, name: normalized.code });
   }
 
-  const output = dedupeSymbols(matched);
+  const output = dedupeSymbols(matched, 'quoteCode');
   if (!output.length) {
     throw new HttpError(404, `未匹配到可同步品种: ${quoteCodeFilter}`);
   }
+  return output;
+}
+
+function resolveStockSymbolsForSync(stockCodeFilter = '') {
+  const fromBasics = dedupeSymbols(
+    stockBasicsRepository.listByMarket('A').map((item) => ({
+      stockCode: String(item.code || '').trim().toUpperCase(),
+      name: item.name || '',
+    })).filter((item) => isLikelyAStockCode(item.stockCode)),
+    'stockCode',
+  );
+  const configured = dedupeSymbols(
+    stockMonitorRepository.listSymbols({ onlyActive: true, symbolType: 'stock' }).map((item) => ({
+      stockCode: String(item.stockCode || '').trim().toUpperCase(),
+      name: item.name || '',
+    })),
+    'stockCode',
+  );
+  const universe = fromBasics.length ? fromBasics : configured;
+
+  const filterText = String(stockCodeFilter || '').trim().toUpperCase();
+  const normalizedFilter = filterText.replace(/^(SH|SZ)/, '');
+  if (!filterText) {
+    if (!universe.length) {
+      throw new HttpError(400, '未找到可同步股票，请先同步股票基础信息（stock_basics）');
+    }
+    return universe;
+  }
+
+  const output = universe.filter((item) => {
+    const code = String(item.stockCode || '').toUpperCase();
+    const name = String(item.name || '').toUpperCase();
+    return (
+      code.includes(filterText)
+      || code.includes(normalizedFilter)
+      || name.includes(filterText)
+    );
+  });
+
+  if (!output.length) {
+    throw new HttpError(404, `未匹配到可同步股票: ${stockCodeFilter}`);
+  }
+
   return output;
 }
 
@@ -399,7 +490,7 @@ function candlesToBars(candles = [], startDay, endDay, source = 'eastmoney.push2
   return out;
 }
 
-function summarizeSymbols(rows = [], intervalSeconds) {
+function summarizeSymbols(rows = [], intervalSeconds, symbolField = 'quoteCode') {
   const symbols = rows.map((row) => {
     const bars = toNum(row.bars, 0);
     const estimatedMissingBars = calcMissingBarsBySpan(
@@ -412,7 +503,7 @@ function summarizeSymbols(rows = [], intervalSeconds) {
       ? Number(((bars / (bars + estimatedMissingBars)) * 100).toFixed(2))
       : 0;
     return {
-      quoteCode: row.quoteCode,
+      [symbolField]: row[symbolField],
       symbolName: row.symbolName || '',
       bars,
       estimatedMissingBars,
@@ -452,65 +543,298 @@ function summarizeSymbols(rows = [], intervalSeconds) {
   };
 }
 
+function buildStockQueryPayload(payload = {}) {
+  const timeframe = normalizeMarketDataTimeframe(payload.timeframe || '1m');
+  const intervalSeconds = INTRADAY_TIMEFRAME_SECONDS[timeframe];
+  if (!intervalSeconds) {
+    throw new HttpError(400, `不支持的时间粒度: ${timeframe}`);
+  }
+
+  const stockCode = String(payload.stockCode || payload.quoteCode || '').trim().toUpperCase();
+  let tradeDay = String(payload.tradeDay || '').trim();
+  let startDay = String(payload.startDay || '').trim();
+  let endDay = String(payload.endDay || '').trim();
+  if (tradeDay && !/^\d{4}-\d{2}-\d{2}$/.test(tradeDay)) {
+    throw new HttpError(400, 'tradeDay 格式非法，应为 YYYY-MM-DD');
+  }
+  if (startDay && !/^\d{4}-\d{2}-\d{2}$/.test(startDay)) {
+    throw new HttpError(400, 'startDay 格式非法，应为 YYYY-MM-DD');
+  }
+  if (endDay && !/^\d{4}-\d{2}-\d{2}$/.test(endDay)) {
+    throw new HttpError(400, 'endDay 格式非法，应为 YYYY-MM-DD');
+  }
+
+  if (tradeDay && !startDay && !endDay) {
+    startDay = tradeDay;
+    endDay = tradeDay;
+  }
+
+  if (startDay && endDay && startDay > endDay) {
+    throw new HttpError(400, '开始日期不能晚于结束日期');
+  }
+
+  tradeDay = startDay && endDay && startDay === endDay ? startDay : '';
+
+  const page = clamp(payload.page || 1, 1, 100000);
+  const limit = clamp(payload.limit || 200, 20, 1000);
+
+  return {
+    timeframe,
+    intervalSeconds,
+    stockCode,
+    tradeDay,
+    startDay,
+    endDay,
+    page,
+    limit,
+  };
+}
+
+function buildFuturesQueryPayload(payload = {}) {
+  const timeframe = normalizeMarketDataTimeframe(payload.timeframe || '1m');
+  const intervalSeconds = INTRADAY_TIMEFRAME_SECONDS[timeframe];
+  if (!intervalSeconds) {
+    throw new HttpError(400, `不支持的时间粒度: ${timeframe}`);
+  }
+
+  const quoteCode = String(payload.quoteCode || '').trim().toUpperCase();
+  let tradeDay = String(payload.tradeDay || '').trim();
+  let startDay = String(payload.startDay || '').trim();
+  let endDay = String(payload.endDay || '').trim();
+  if (tradeDay && !/^\d{4}-\d{2}-\d{2}$/.test(tradeDay)) {
+    throw new HttpError(400, 'tradeDay 格式非法，应为 YYYY-MM-DD');
+  }
+  if (startDay && !/^\d{4}-\d{2}-\d{2}$/.test(startDay)) {
+    throw new HttpError(400, 'startDay 格式非法，应为 YYYY-MM-DD');
+  }
+  if (endDay && !/^\d{4}-\d{2}-\d{2}$/.test(endDay)) {
+    throw new HttpError(400, 'endDay 格式非法，应为 YYYY-MM-DD');
+  }
+
+  if (tradeDay && !startDay && !endDay) {
+    startDay = tradeDay;
+    endDay = tradeDay;
+  }
+
+  if (!startDay && !endDay) {
+    const latestDay = futuresRepository.getLatestIntradayTradeDayOverall({
+      timeframe,
+      quoteCode,
+    }) || '';
+    startDay = latestDay;
+    endDay = latestDay;
+  }
+
+  if (startDay && endDay && startDay > endDay) {
+    throw new HttpError(400, '开始日期不能晚于结束日期');
+  }
+
+  tradeDay = startDay && endDay && startDay === endDay ? startDay : '';
+
+  const page = clamp(payload.page || 1, 1, 100000);
+  const limit = clamp(payload.limit || 200, 20, 1000);
+
+  return {
+    timeframe,
+    intervalSeconds,
+    quoteCode,
+    tradeDay,
+    startDay,
+    endDay,
+    page,
+    limit,
+  };
+}
+
+function buildRangeFallback(startDay, endDay, timeframe, symbolType) {
+  if (startDay && endDay) return { startDay, endDay };
+  const today = formatLocalDate(new Date());
+  if (symbolType === 'stock') {
+    if (timeframe === '1m') return { startDay: today, endDay: today };
+    const back = addDays(new Date(), -120);
+    return { startDay: formatLocalDate(back), endDay: today };
+  }
+  return { startDay, endDay };
+}
+
+function persistQualityReport({ symbolType, timeframe, payload }) {
+  try {
+    const datasetName = symbolType === 'stock' ? 'stock_intraday_bars' : 'futures_intraday_bars';
+    marketQualityRepository.createReport({
+      datasetName,
+      symbolType,
+      timeframe,
+      scopeType: 'range',
+      scopeKey: payload?.filters?.quoteCode || payload?.filters?.stockCode || null,
+      startDate: payload?.filters?.startDay || null,
+      endDate: payload?.filters?.endDay || null,
+      totalExpected: Number(payload?.summary?.totalBars || 0) + Number(payload?.summary?.estimatedMissingBars || 0),
+      totalActual: Number(payload?.summary?.totalBars || 0),
+      gapCount: Number(payload?.summary?.estimatedMissingBars || 0),
+      anomalyCount: 0,
+      coverageRatio: Number(payload?.summary?.completenessPct || 0),
+      reportJson: JSON.stringify({
+        pagination: payload?.pagination || null,
+        summary: payload?.summary || null,
+      }),
+    });
+  } catch {}
+}
+
 export const marketDataService = {
-  queryFuturesIntraday(payload = {}) {
-    const timeframe = normalizeMarketDataTimeframe(payload.timeframe || '1m');
-    const intervalSeconds = INTRADAY_TIMEFRAME_SECONDS[timeframe];
-    if (!intervalSeconds) {
-      throw new HttpError(400, `不支持的时间粒度: ${timeframe}`);
-    }
+  queryMarketData(payload = {}) {
+    const symbolType = normalizeSymbolType(payload.symbolType || payload.assetType || 'futures');
 
-    const quoteCode = String(payload.quoteCode || '').trim().toUpperCase();
-    let tradeDay = String(payload.tradeDay || '').trim();
-    let startDay = String(payload.startDay || '').trim();
-    let endDay = String(payload.endDay || '').trim();
-    if (tradeDay && !/^\d{4}-\d{2}-\d{2}$/.test(tradeDay)) {
-      throw new HttpError(400, 'tradeDay 格式非法，应为 YYYY-MM-DD');
-    }
-    if (startDay && !/^\d{4}-\d{2}-\d{2}$/.test(startDay)) {
-      throw new HttpError(400, 'startDay 格式非法，应为 YYYY-MM-DD');
-    }
-    if (endDay && !/^\d{4}-\d{2}-\d{2}$/.test(endDay)) {
-      throw new HttpError(400, 'endDay 格式非法，应为 YYYY-MM-DD');
-    }
+    if (symbolType === 'stock') {
+      const base = buildStockQueryPayload(payload);
+      const fallback = buildRangeFallback(base.startDay, base.endDay, base.timeframe, symbolType);
+      const startDay = fallback.startDay;
+      const endDay = fallback.endDay;
+      const tradeDay = startDay && endDay && startDay === endDay ? startDay : '';
 
-    if (tradeDay && !startDay && !endDay) {
-      startDay = tradeDay;
-      endDay = tradeDay;
-    }
+      const useEodTable = ['1d', '1w', '1M'].includes(base.timeframe);
 
-    if (!startDay && !endDay) {
-      const latestDay = futuresRepository.getLatestIntradayTradeDayOverall({
-        timeframe,
-        quoteCode,
-      }) || '';
-      startDay = latestDay;
-      endDay = latestDay;
-    }
+      const total = useEodTable
+        ? stockBarsRepository.countEodBars({
+          timeframe: base.timeframe,
+          tradeDay,
+          startDay,
+          endDay,
+          stockCode: base.stockCode,
+        })
+        : stockBarsRepository.countIntradayBars({
+          timeframe: base.timeframe,
+          tradeDay,
+          startDay,
+          endDay,
+          stockCode: base.stockCode,
+        });
 
-    if (startDay && endDay && startDay > endDay) {
-      throw new HttpError(400, '开始日期不能晚于结束日期');
-    }
+      const rawItems = useEodTable
+        ? stockBarsRepository.listEodBarsForReview({
+          timeframe: base.timeframe,
+          tradeDay,
+          startDay,
+          endDay,
+          stockCode: base.stockCode,
+          page: base.page,
+          limit: base.limit,
+        })
+        : stockBarsRepository.listIntradayBarsForReview({
+          timeframe: base.timeframe,
+          tradeDay,
+          startDay,
+          endDay,
+          stockCode: base.stockCode,
+          page: base.page,
+          limit: base.limit,
+        });
 
-    tradeDay = startDay && endDay && startDay === endDay ? startDay : '';
+      const items = attachGapMetrics(rawItems.map((item) => ({ ...item, quoteCode: item.stockCode })), base.intervalSeconds, 'desc');
 
-    const page = clamp(payload.page || 1, 1, 100000);
-    const limit = clamp(payload.limit || 200, 20, 1000);
-    if (!startDay && !endDay) {
-      return {
-        dataset: 'futures_intraday_bars',
+      let symbols = [];
+      let summary = {
+        symbolCount: 0,
+        totalBars: total,
+        estimatedMissingBars: 0,
+        completenessPct: 0,
+        firstDate: null,
+        lastDate: null,
+      };
+
+      const canTryLightOverview = useEodTable && !String(base.stockCode || '').trim();
+      const spanDays = (startDay && endDay)
+        ? Math.max(Math.floor((parseDateInput(endDay, 'endDay').getTime() - parseDateInput(startDay, 'startDay').getTime()) / 86400000) + 1, 1)
+        : 1;
+      const useLightOverview = canTryLightOverview
+        && spanDays > LIGHT_OVERVIEW_MAX_SPAN_DAYS
+        && total > LIGHT_OVERVIEW_MAX_TOTAL_BARS;
+
+      if (useLightOverview) {
+        const eodSummary = stockBarsRepository.summarizeEodBars({
+          timeframe: base.timeframe,
+          tradeDay,
+          startDay,
+          endDay,
+          stockCode: base.stockCode,
+        });
+        summary = {
+          symbolCount: Number(eodSummary.symbolCount || 0),
+          totalBars: total,
+          estimatedMissingBars: 0,
+          completenessPct: 100,
+          firstDate: eodSummary.firstDate || null,
+          lastDate: eodSummary.lastDate || null,
+          overviewMode: 'light',
+        };
+      } else {
+        const overviewRows = (useEodTable
+          ? stockBarsRepository.listEodSymbolsOverview({
+            timeframe: base.timeframe,
+            tradeDay,
+            startDay,
+            endDay,
+            stockCode: base.stockCode,
+            limit: OVERVIEW_SYMBOL_LIMIT,
+          })
+          : stockBarsRepository.listIntradaySymbolsOverview({
+            timeframe: base.timeframe,
+            tradeDay,
+            startDay,
+            endDay,
+            stockCode: base.stockCode,
+            limit: OVERVIEW_SYMBOL_LIMIT,
+          })).map((item) => ({ ...item, quoteCode: item.stockCode }));
+
+        const overviewResult = summarizeSymbols(overviewRows, base.intervalSeconds, 'quoteCode');
+        symbols = overviewResult.symbols;
+        summary = overviewResult.summary;
+      }
+
+      const result = {
+        dataset: useEodTable ? 'stock_eod_bars' : 'stock_intraday_bars',
+        symbolType,
         filters: {
-          timeframe,
+          timeframe: base.timeframe,
+          tradeDay,
+          startDay,
+          endDay,
+          stockCode: base.stockCode,
+          quoteCode: base.stockCode,
+          page: base.page,
+          limit: base.limit,
+        },
+        pagination: {
+          page: base.page,
+          limit: base.limit,
+          total,
+          totalPages: total > 0 ? Math.ceil(total / base.limit) : 0,
+        },
+        summary,
+        symbols,
+        items,
+      };
+      persistQualityReport({ symbolType, timeframe: base.timeframe, payload: result });
+      return result;
+    }
+
+    const base = buildFuturesQueryPayload(payload);
+    if (!base.startDay && !base.endDay) {
+      const emptyResult = {
+        dataset: 'futures_intraday_bars',
+        symbolType,
+        filters: {
+          timeframe: base.timeframe,
           tradeDay: null,
           startDay: null,
           endDay: null,
-          quoteCode,
-          page,
-          limit,
+          quoteCode: base.quoteCode,
+          page: base.page,
+          limit: base.limit,
         },
         pagination: {
-          page,
-          limit,
+          page: base.page,
+          limit: base.limit,
           total: 0,
           totalPages: 0,
         },
@@ -525,70 +849,75 @@ export const marketDataService = {
         symbols: [],
         items: [],
       };
+      persistQualityReport({ symbolType, timeframe: base.timeframe, payload: emptyResult });
+      return emptyResult;
     }
 
     const total = futuresRepository.countIntradayBarsForReview({
-      timeframe,
-      tradeDay,
-      startDay,
-      endDay,
-      quoteCode,
+      timeframe: base.timeframe,
+      tradeDay: base.tradeDay,
+      startDay: base.startDay,
+      endDay: base.endDay,
+      quoteCode: base.quoteCode,
     });
+
     const rawItems = futuresRepository.listIntradayBarsForReview({
-      timeframe,
-      tradeDay,
-      startDay,
-      endDay,
-      quoteCode,
-      page,
-      limit,
+      timeframe: base.timeframe,
+      tradeDay: base.tradeDay,
+      startDay: base.startDay,
+      endDay: base.endDay,
+      quoteCode: base.quoteCode,
+      page: base.page,
+      limit: base.limit,
     });
-    const items = attachGapMetrics(rawItems, intervalSeconds, 'desc');
+    const items = attachGapMetrics(rawItems, base.intervalSeconds, 'desc');
 
     const overviewRows = futuresRepository.listIntradaySymbolsOverview({
-      timeframe,
-      tradeDay,
-      startDay,
-      endDay,
-      quoteCode,
-      limit: 500,
+      timeframe: base.timeframe,
+      tradeDay: base.tradeDay,
+      startDay: base.startDay,
+      endDay: base.endDay,
+      quoteCode: base.quoteCode,
+      limit: OVERVIEW_SYMBOL_LIMIT,
     });
-    const { symbols, summary } = summarizeSymbols(overviewRows, intervalSeconds);
+    const { symbols, summary } = summarizeSymbols(overviewRows, base.intervalSeconds, 'quoteCode');
 
-    return {
+    const result = {
       dataset: 'futures_intraday_bars',
+      symbolType,
       filters: {
-        timeframe,
-        tradeDay,
-        startDay,
-        endDay,
-        quoteCode,
-        page,
-        limit,
+        timeframe: base.timeframe,
+        tradeDay: base.tradeDay,
+        startDay: base.startDay,
+        endDay: base.endDay,
+        quoteCode: base.quoteCode,
+        page: base.page,
+        limit: base.limit,
       },
       pagination: {
-        page,
-        limit,
+        page: base.page,
+        limit: base.limit,
         total,
-        totalPages: total > 0 ? Math.ceil(total / limit) : 0,
+        totalPages: total > 0 ? Math.ceil(total / base.limit) : 0,
       },
       summary,
       symbols,
       items,
     };
+
+    persistQualityReport({ symbolType, timeframe: base.timeframe, payload: result });
+    return result;
   },
 
-  async syncFuturesIntraday(payload = {}) {
+  async syncMarketData(payload = {}) {
+    const symbolType = normalizeSymbolType(payload.symbolType || payload.assetType || 'futures');
     const timeframe = normalizeMarketDataTimeframe(payload.timeframe || '1m');
-    const rule = SYNCABLE_TIMEFRAME_RULES[timeframe];
+    const rule = SYNCABLE_RULES_BY_SYMBOL_TYPE[symbolType]?.[timeframe];
     if (!rule) {
-      const supported = Object.entries(SYNCABLE_TIMEFRAME_RULES)
-        .map(([key, item]) => `${item.label}(${key})`)
+      const supported = Object.keys(SYNCABLE_RULES_BY_SYMBOL_TYPE[symbolType] || {})
+        .map((key) => `${key}`)
         .join(', ');
-      throw new HttpError(
-        400,
-        `当前仅支持 ${supported} 的手动同步`,
-      );
+      throw new HttpError(400, `${symbolType} 当前仅支持以下粒度手动同步: ${supported || '--'}`);
     }
 
     const syncRange = String(payload.syncRange || 'single_day') === 'from_trade_day_to_now'
@@ -601,12 +930,12 @@ export const marketDataService = {
     parseDateInput(startDay, 'tradeDay');
 
     const today = formatLocalDate(new Date());
-    const earliestAllowedDay = formatLocalDate(addDays(new Date(), -(rule.maxDays - 1)));
-    if (startDay < earliestAllowedDay) {
-      throw new HttpError(
-        400,
-        `${rule.label}粒度最早仅支持同步到 ${earliestAllowedDay}，以避免过量历史加载`,
-      );
+    const hasLookbackLimit = Number.isFinite(Number(rule.maxDays)) && Number(rule.maxDays) > 0;
+    const earliestAllowedDay = hasLookbackLimit
+      ? formatLocalDate(addDays(new Date(), -(Number(rule.maxDays) - 1)))
+      : '';
+    if (hasLookbackLimit && startDay < earliestAllowedDay) {
+      throw new HttpError(400, `${rule.label}粒度最早仅支持同步到 ${earliestAllowedDay}，以避免过量历史加载`);
     }
     if (startDay > today) {
       throw new HttpError(400, '起始交易日不能晚于今天');
@@ -620,73 +949,315 @@ export const marketDataService = {
     const expectedBars = Math.ceil(daySpan / Math.max(Number(rule.periodDays || 1), 1 / 1440));
     const lmt = clamp(Math.ceil(expectedBars * 1.6), 800, rule.maxLmt);
 
-    const symbols = resolveSymbolsForSync(payload.quoteCode);
+    const job = marketSyncJobRepository.createJob({
+      jobType: 'sync',
+      triggerType: 'manual',
+      marketScope: symbolType,
+      datasetScope: rule.datasetScope,
+      symbolType,
+      timeframe,
+      startDate: startDay,
+      endDate: endDay,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      paramsJson: JSON.stringify(payload || {}),
+    });
+
     const success = [];
     const failed = [];
     let writtenBars = 0;
     let firstSyncedDay = null;
     let lastSyncedDay = null;
 
-    for (const symbol of symbols) {
-      try {
-        const normalized = normalizeQuoteCode(symbol.quoteCode);
-        const candles = await fetchKlineHistory({
-          secid: normalized.secid,
-          klt: rule.klt,
+    try {
+      if (symbolType === 'stock') {
+        const symbols = resolveStockSymbolsForSync(payload.stockCode || payload.quoteCode);
+        for (const symbol of symbols) {
+          const item = marketSyncJobRepository.createJobItem({
+            jobId: job.id,
+            symbolCode: symbol.stockCode,
+            quoteCode: symbol.stockCode,
+            symbolType,
+            market: 'A',
+            timeframe,
+            rangeStart: startDay,
+            rangeEnd: endDay,
+            status: 'running',
+            startedAt: new Date().toISOString(),
+          });
+
+          try {
+            let lastError = null;
+            for (let attempt = 0; attempt <= STOCK_DAILY_SYNC_MAX_RETRIES; attempt += 1) {
+              try {
+                await stockDataService.getHistory(symbol.stockCode, {
+                  days: Math.max(daySpan + 30, 180),
+                  localMode: 'coverage_first',
+                });
+                lastError = null;
+                break;
+              } catch (error) {
+                lastError = error;
+                if (!isTushareRateLimitError(error) || attempt >= STOCK_DAILY_SYNC_MAX_RETRIES) {
+                  throw error;
+                }
+                await sleep((attempt + 1) * 2500);
+              }
+            }
+            if (lastError) {
+              throw lastError;
+            }
+            const rows = stockBarsRepository.listEodBars({
+              stockCode: symbol.stockCode,
+              timeframe: '1d',
+              startDay,
+              endDay,
+              limit: Math.max(daySpan * 2, 400),
+            });
+            const written = rows.length;
+            writtenBars += written;
+
+            const firstDay = rows[0]?.tradeDay || null;
+            const lastDay = rows[rows.length - 1]?.tradeDay || null;
+            if (firstDay && (!firstSyncedDay || firstDay < firstSyncedDay)) firstSyncedDay = firstDay;
+            if (lastDay && (!lastSyncedDay || lastDay > lastSyncedDay)) lastSyncedDay = lastDay;
+
+            success.push({
+              stockCode: symbol.stockCode,
+              symbolName: symbol.name || '',
+              fetchedCandles: written,
+              writtenBars: written,
+              firstDay,
+              lastDay,
+            });
+
+            marketSyncJobRepository.updateJobItem(item.id, {
+              status: 'success',
+              barsWritten: written,
+              sourceProvider: 'stockDataService.getHistory',
+              finishedAt: new Date().toISOString(),
+            });
+          } catch (error) {
+            const message = String(error?.message || '未知错误');
+            failed.push({
+              stockCode: symbol.stockCode,
+              symbolName: symbol.name || '',
+              message,
+            });
+            marketSyncJobRepository.updateJobItem(item.id, {
+              status: 'failed',
+              errorCode: 'SYNC_STOCK_FAILED',
+              errorMessage: message,
+              finishedAt: new Date().toISOString(),
+            });
+          }
+        }
+
+        const result = {
+          ok: failed.length === 0,
+          symbolType,
+          timeframe,
+          syncRange,
           startDay,
           endDay,
-          lmt,
-        });
-        const bars = candlesToBars(candles, startDay, endDay, 'eastmoney.push2his');
-        const written = futuresRepository.upsertIntradayBars({
-          quoteCode: normalized.quoteCode,
-          timeframe,
-          bars,
-        });
-        const firstBarDay = bars[0]?.tradeDay || null;
-        const lastBarDay = bars[bars.length - 1]?.tradeDay || null;
-        if (firstBarDay && (!firstSyncedDay || firstBarDay < firstSyncedDay)) {
-          firstSyncedDay = firstBarDay;
-        }
-        if (lastBarDay && (!lastSyncedDay || lastBarDay > lastSyncedDay)) {
-          lastSyncedDay = lastBarDay;
-        }
+          firstSyncedDay,
+          lastSyncedDay,
+          stockCode: String(payload.stockCode || payload.quoteCode || '').trim().toUpperCase(),
+          earliestAllowedDay,
+          maxLookbackDays: rule.maxDays,
+          symbolTotal: symbols.length,
+          successSymbols: success.length,
+          failedSymbols: failed.length,
+          writtenBars,
+          success,
+          failed,
+          jobId: job.id,
+        };
 
-        writtenBars += written;
-        success.push({
-          quoteCode: normalized.quoteCode,
-          symbolName: symbol.name || '',
-          fetchedCandles: candles.length,
-          writtenBars: written,
-          firstDay: firstBarDay,
-          lastDay: lastBarDay,
+        marketSyncJobRepository.updateJob(job.id, {
+          status: failed.length ? (success.length ? 'partial_failed' : 'failed') : 'success',
+          finishedAt: new Date().toISOString(),
+          summaryJson: JSON.stringify(result),
         });
-      } catch (error) {
-        failed.push({
-          quoteCode: symbol.quoteCode,
-          symbolName: symbol.name || '',
-          message: String(error?.message || '未知错误'),
-        });
+
+        return result;
       }
+
+      const symbols = resolveFuturesSymbolsForSync(payload.quoteCode);
+
+      for (const symbol of symbols) {
+        const item = marketSyncJobRepository.createJobItem({
+          jobId: job.id,
+          symbolCode: String(symbol.quoteCode || '').split('.').pop() || symbol.quoteCode,
+          quoteCode: symbol.quoteCode,
+          symbolType,
+          market: String(symbol.quoteCode || '').split('.')[0] || null,
+          timeframe,
+          rangeStart: startDay,
+          rangeEnd: endDay,
+          status: 'running',
+          startedAt: new Date().toISOString(),
+        });
+
+        try {
+          const normalized = normalizeQuoteCode(symbol.quoteCode);
+          const candles = await fetchKlineHistory({
+            secid: normalized.secid,
+            klt: rule.klt,
+            startDay,
+            endDay,
+            lmt,
+          });
+          const bars = candlesToBars(candles, startDay, endDay, 'eastmoney.push2his');
+          const written = timeframe === '1m'
+            ? futuresRepository.upsertIntradayBars({
+              quoteCode: normalized.quoteCode,
+              timeframe,
+              bars,
+            })
+            : futuresRepository.upsertEodBars({
+              quoteCode: normalized.quoteCode,
+              timeframe,
+              bars,
+            });
+
+          const firstBarDay = bars[0]?.tradeDay || null;
+          const lastBarDay = bars[bars.length - 1]?.tradeDay || null;
+          if (firstBarDay && (!firstSyncedDay || firstBarDay < firstSyncedDay)) firstSyncedDay = firstBarDay;
+          if (lastBarDay && (!lastSyncedDay || lastBarDay > lastSyncedDay)) lastSyncedDay = lastBarDay;
+
+          writtenBars += written;
+          success.push({
+            quoteCode: normalized.quoteCode,
+            symbolName: symbol.name || '',
+            fetchedCandles: candles.length,
+            writtenBars: written,
+            firstDay: firstBarDay,
+            lastDay: lastBarDay,
+          });
+
+          marketSyncJobRepository.updateJobItem(item.id, {
+            status: 'success',
+            barsWritten: written,
+            sourceProvider: 'eastmoney.push2his',
+            finishedAt: new Date().toISOString(),
+          });
+        } catch (error) {
+          const message = String(error?.message || '未知错误');
+          failed.push({
+            quoteCode: symbol.quoteCode,
+            symbolName: symbol.name || '',
+            message,
+          });
+          marketSyncJobRepository.updateJobItem(item.id, {
+            status: 'failed',
+            errorCode: 'SYNC_FUTURES_FAILED',
+            errorMessage: message,
+            finishedAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      const result = {
+        ok: failed.length === 0,
+        symbolType,
+        timeframe,
+        syncRange,
+        startDay,
+        endDay,
+        firstSyncedDay,
+        lastSyncedDay,
+        quoteCode: String(payload.quoteCode || '').trim().toUpperCase(),
+        earliestAllowedDay,
+        maxLookbackDays: rule.maxDays,
+        symbolTotal: symbols.length,
+        successSymbols: success.length,
+        failedSymbols: failed.length,
+        writtenBars,
+        success,
+        failed,
+        jobId: job.id,
+      };
+
+      marketSyncJobRepository.updateJob(job.id, {
+        status: failed.length ? (success.length ? 'partial_failed' : 'failed') : 'success',
+        finishedAt: new Date().toISOString(),
+        summaryJson: JSON.stringify(result),
+      });
+
+      return result;
+    } catch (error) {
+      marketSyncJobRepository.updateJob(job.id, {
+        status: 'failed',
+        finishedAt: new Date().toISOString(),
+        summaryJson: JSON.stringify({ error: String(error?.message || error) }),
+      });
+      throw error;
     }
+  },
+
+  listSyncJobs(payload = {}) {
+    const result = marketSyncJobRepository.listJobs({
+      page: payload.page,
+      limit: payload.limit,
+      status: payload.status,
+      jobType: payload.jobType,
+    });
 
     return {
-      ok: failed.length === 0,
-      timeframe,
-      syncRange,
-      startDay,
-      endDay,
-      firstSyncedDay,
-      lastSyncedDay,
-      quoteCode: String(payload.quoteCode || '').trim().toUpperCase(),
-      earliestAllowedDay,
-      maxLookbackDays: rule.maxDays,
-      symbolTotal: symbols.length,
-      successSymbols: success.length,
-      failedSymbols: failed.length,
-      writtenBars,
-      success,
-      failed,
+      ...result,
+      items: result.items.map((item) => ({
+        ...item,
+        ...(() => {
+          const details = marketSyncJobRepository.listJobItems(item.id);
+          const totalItems = details.length;
+          const successItems = details.filter((entry) => entry.status === 'success').length;
+          const failedItems = details.filter((entry) => entry.status === 'failed').length;
+          const runningItems = details.filter((entry) => entry.status === 'running').length;
+          const queuedItems = details.filter((entry) => entry.status === 'queued').length;
+          const doneItems = successItems + failedItems;
+          const progressPct = totalItems > 0
+            ? Number(((doneItems / totalItems) * 100).toFixed(2))
+            : 0;
+          return {
+            details,
+            progress: {
+              totalItems,
+              successItems,
+              failedItems,
+              runningItems,
+              queuedItems,
+              doneItems,
+              progressPct,
+            },
+          };
+        })(),
+      })),
     };
+  },
+
+  listQualityReports(payload = {}) {
+    return {
+      items: marketQualityRepository.listReports({
+        datasetName: payload.datasetName,
+        timeframe: payload.timeframe,
+        scopeType: payload.scopeType,
+        limit: payload.limit,
+      }),
+    };
+  },
+
+  queryFuturesIntraday(payload = {}) {
+    return this.queryMarketData({
+      ...payload,
+      symbolType: 'futures',
+    });
+  },
+
+  async syncFuturesIntraday(payload = {}) {
+    return this.syncMarketData({
+      ...payload,
+      symbolType: 'futures',
+    });
   },
 };

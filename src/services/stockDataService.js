@@ -10,6 +10,12 @@ import { env } from '../config/env.js';
 
 const execFileAsync = promisify(execFile);
 let localDailyBarsInitialized = false;
+let lastTushareDailyRequestAt = 0;
+
+function sleepMs(ms = 0) {
+  const timeout = Math.max(0, Number(ms) || 0);
+  return new Promise((resolve) => setTimeout(resolve, timeout));
+}
 
 function toBasicLookupCode(code = '') {
   const normalized = normalizeStockCode(code);
@@ -176,15 +182,74 @@ function daysFromToday(dateText = '') {
   return Math.abs(Date.now() - ts) / (24 * 60 * 60 * 1000);
 }
 
+function normalizeTradeDay(value = '') {
+  const text = compactDateToDash(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  if (/^\d{8}$/.test(String(value || '').trim())) {
+    const raw = String(value || '').trim();
+    return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+  }
+  return '';
+}
+
+async function fetchWithTimeout(url, options = {}, { timeoutMs = 10000, timeoutMessage = '请求超时' } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 10000));
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new HttpError(504, timeoutMessage);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function toCompactDateText(input = '') {
+  const text = String(input || '').trim();
+  if (!text) return '';
+  if (/^\d{8}$/.test(text)) return text;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.replace(/-/g, '');
+  return '';
+}
+
+function formatDateCompactByOffset(days = 0) {
+  const base = new Date();
+  base.setHours(0, 0, 0, 0);
+  base.setDate(base.getDate() + Number(days || 0));
+  const year = base.getFullYear();
+  const month = String(base.getMonth() + 1).padStart(2, '0');
+  const day = String(base.getDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
+function normalizeTushareTradeDay(input = '') {
+  const text = String(input || '').trim();
+  if (/^\d{8}$/.test(text)) {
+    return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  return '';
+}
+
 function ensureLocalDailyBarsTable() {
   if (localDailyBarsInitialized) return;
   const db = getDb();
   db.prepare(`
-    CREATE TABLE IF NOT EXISTS stock_daily_bars (
+    CREATE TABLE IF NOT EXISTS stock_eod_bars (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       stock_code TEXT NOT NULL,
-      ts_code TEXT NOT NULL,
-      trade_date TEXT NOT NULL,
+      market TEXT,
+      ts_code TEXT,
+      timeframe TEXT NOT NULL,
+      trade_day TEXT NOT NULL,
+      bucket_ts INTEGER NOT NULL,
+      date TEXT NOT NULL,
       open REAL,
       high REAL,
       low REAL,
@@ -198,10 +263,13 @@ function ensureLocalDailyBarsTable() {
       synced_at TEXT NOT NULL DEFAULT (datetime('now')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(stock_code, trade_date)
+      UNIQUE(stock_code, timeframe, trade_day)
     )
   `).run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_stock_daily_bars_code_date ON stock_daily_bars(stock_code, trade_date DESC)').run();
+  db.prepare(`
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_lookup
+    ON stock_eod_bars(stock_code, timeframe, trade_day, bucket_ts ASC)
+  `).run();
   localDailyBarsInitialized = true;
 }
 
@@ -209,19 +277,33 @@ function readLocalDailyBars(stockCode = '', limit = 240) {
   try {
     ensureLocalDailyBarsTable();
     const db = getDb();
-    const rows = db.prepare(`
-      SELECT trade_date, open, high, low, close, vol
-      FROM stock_daily_bars
+    const normalized = normalizeStockCode(stockCode);
+    const normalizedLimit = Math.max(1, Number(limit) || 240);
+    let rows = db.prepare(`
+      SELECT trade_day, open, high, low, close, vol
+      FROM stock_eod_bars
       WHERE stock_code = ?
-      ORDER BY trade_date DESC
+        AND timeframe = '1d'
+      ORDER BY trade_day DESC
       LIMIT ?
-    `).all(stockCode, Math.max(1, Number(limit) || 240));
+    `).all(normalized, normalizedLimit);
+
+    if (!rows.length) {
+      rows = db.prepare(`
+        SELECT trade_date AS trade_day, open, high, low, close, vol
+        FROM stock_daily_bars
+        WHERE stock_code = ?
+        ORDER BY trade_date DESC
+        LIMIT ?
+      `).all(normalized, normalizedLimit);
+    }
+
     return rows
       .slice()
       .reverse()
       .map((item) => ({
-        ts: dateToTsSeconds(item.trade_date),
-        date: compactDateToDash(item.trade_date),
+        ts: dateToTsSeconds(item.trade_day),
+        date: compactDateToDash(item.trade_day),
         open: Number(item.open || 0),
         high: Number(item.high || 0),
         low: Number(item.low || 0),
@@ -239,15 +321,21 @@ function upsertLocalDailyBars(stockCode = '', rows = [], source = 'external') {
   try {
     ensureLocalDailyBarsTable();
     const db = getDb();
-    const tsCode = toTushareLikeTsCode(stockCode);
+    const normalizedStockCode = normalizeStockCode(stockCode);
+    const tsCode = toTushareLikeTsCode(normalizedStockCode);
+    const market = inferMarket(normalizedStockCode);
     const insert = db.prepare(`
-      INSERT INTO stock_daily_bars (
-        stock_code, ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount, source, synced_at, updated_at
+      INSERT INTO stock_eod_bars (
+        stock_code, market, ts_code, timeframe, trade_day, bucket_ts, date, open, high, low, close, pre_close, change, pct_chg, vol, amount, source, synced_at, updated_at
       ) VALUES (
-        @stock_code, @ts_code, @trade_date, @open, @high, @low, @close, @pre_close, @change, @pct_chg, @vol, @amount, @source, datetime('now'), datetime('now')
+        @stock_code, @market, @ts_code, '1d', @trade_day, @bucket_ts, @date, @open, @high, @low, @close, @pre_close, @change, @pct_chg, @vol, @amount, @source, datetime('now'), datetime('now')
       )
-      ON CONFLICT(stock_code, trade_date) DO UPDATE SET
+      ON CONFLICT(stock_code, timeframe, trade_day) DO UPDATE SET
+        market = excluded.market,
         ts_code = excluded.ts_code,
+        bucket_ts = excluded.bucket_ts,
+        trade_day = excluded.trade_day,
+        date = excluded.date,
         open = excluded.open,
         high = excluded.high,
         low = excluded.low,
@@ -266,9 +354,10 @@ function upsertLocalDailyBars(stockCode = '', rows = [], source = 'external') {
       bars.forEach((item) => {
         const close = Number(item.close || 0);
         if (!Number.isFinite(close) || close <= 0) return;
-        const dateText = compactDateToDash(item.date);
-        const tradeDate = dateText.replace(/-/g, '');
-        if (!/^\d{8}$/.test(tradeDate)) return;
+        const tradeDay = normalizeTradeDay(item.date);
+        if (!tradeDay) return;
+        const bucketTs = dateToTsSeconds(tradeDay);
+        if (!Number.isFinite(bucketTs)) return;
         const open = Number(item.open || close);
         const high = Number(item.high || close);
         const low = Number(item.low || close);
@@ -277,9 +366,12 @@ function upsertLocalDailyBars(stockCode = '', rows = [], source = 'external') {
         const change = close - pre;
         const pctChg = pre ? (change / pre) * 100 : 0;
         insert.run({
-          stock_code: stockCode,
+          stock_code: normalizedStockCode,
+          market,
           ts_code: tsCode,
-          trade_date: tradeDate,
+          trade_day: tradeDay,
+          bucket_ts: bucketTs,
+          date: tradeDay,
           open: Number.isFinite(open) ? open : close,
           high: Number.isFinite(high) ? high : close,
           low: Number.isFinite(low) ? low : close,
@@ -639,11 +731,14 @@ async function requestEastmoneyCnDailyChart(stockCode, { limit = 300 } = {}) {
   url.searchParams.set('fields1', 'f1,f2,f3,f4,f5,f6');
   url.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61');
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (peng-stock-analysis stock-data eastmoney-kline)',
       Referer: 'https://quote.eastmoney.com/',
     },
+  }, {
+    timeoutMs: 10000,
+    timeoutMessage: '东方财富日线请求超时',
   });
   if (!response.ok) {
     throw new HttpError(response.status, `东方财富日线请求失败: ${response.status}`);
@@ -651,6 +746,126 @@ async function requestEastmoneyCnDailyChart(stockCode, { limit = 300 } = {}) {
 
   const payload = await response.json();
   return parseEastmoneyKlinePayload(payload);
+}
+
+async function requestTushareApi(apiName, params = {}, fields = '', timeoutMs = 12000) {
+  const token = String(env.TUSHARE_TOKEN || '').trim();
+  if (!token) {
+    throw new HttpError(400, 'TUSHARE_TOKEN 未配置');
+  }
+
+  const url = String(env.TUSHARE_BASE_URL || 'https://api.tushare.pro').trim() || 'https://api.tushare.pro';
+  const minInterval = Math.max(0, Number(env.TUSHARE_DAILY_MIN_INTERVAL_MS) || 0);
+  if (minInterval > 0) {
+    const elapsed = Date.now() - lastTushareDailyRequestAt;
+    const waitMs = minInterval - elapsed;
+    if (waitMs > 0) {
+      await sleepMs(waitMs);
+    }
+  }
+  lastTushareDailyRequestAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (peng-stock-analysis stock-data tushare)',
+      },
+      body: JSON.stringify({
+        api_name: String(apiName || '').trim(),
+        token,
+        params: params || {},
+        fields: String(fields || '').trim(),
+      }),
+    });
+    if (!response.ok) {
+      throw new HttpError(response.status, `Tushare 请求失败: ${response.status}`);
+    }
+    const payload = await response.json();
+    const code = Number(payload?.code);
+    if (code !== 0) {
+      throw new HttpError(502, `Tushare接口异常: code=${payload?.code ?? 'unknown'} msg=${payload?.msg || 'unknown'}`);
+    }
+    return payload?.data || {};
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new HttpError(504, 'Tushare 请求超时');
+    }
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(502, `Tushare 请求异常: ${String(error?.message || 'unknown')}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestTushareCnDailyChart(stockCode, { days = 300 } = {}) {
+  const tsCode = toTushareLikeTsCode(stockCode);
+  if (!/^\d{6}\.(SH|SZ)$/.test(tsCode)) {
+    throw new HttpError(400, 'Tushare日线仅支持A股代码');
+  }
+
+  const lookbackDays = Math.max(Number(days) || 300, 120);
+  const startDate = formatDateCompactByOffset(-lookbackDays);
+  const endDate = formatDateCompactByOffset(0);
+  const data = await requestTushareApi(
+    'daily',
+    {
+      ts_code: tsCode,
+      start_date: startDate,
+      end_date: endDate,
+    },
+    'ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount',
+    12000,
+  );
+
+  const fields = Array.isArray(data?.fields) ? data.fields : [];
+  const items = Array.isArray(data?.items) ? data.items : [];
+  if (!fields.length || !items.length) {
+    throw new HttpError(404, `Tushare日线数据为空: ${tsCode}`);
+  }
+
+  const idx = new Map(fields.map((field, i) => [String(field || '').trim(), i]));
+  const rows = items.map((item) => {
+    const tradeDateRaw = item[idx.get('trade_date')];
+    const tradeDay = normalizeTushareTradeDay(tradeDateRaw);
+    const close = Number(item[idx.get('close')] || 0);
+    if (!tradeDay || !Number.isFinite(close) || close <= 0) return null;
+    const open = Number(item[idx.get('open')] || close);
+    const high = Number(item[idx.get('high')] || close);
+    const low = Number(item[idx.get('low')] || close);
+    const volume = Number(item[idx.get('vol')] || 0);
+    const amount = Number(item[idx.get('amount')] || 0);
+    return {
+      ts: Math.floor(new Date(`${tradeDay}T15:00:00+08:00`).getTime() / 1000),
+      date: tradeDay,
+      open: Number.isFinite(open) ? open : close,
+      high: Number.isFinite(high) ? high : close,
+      low: Number.isFinite(low) ? low : close,
+      close,
+      volume: Number.isFinite(volume) ? volume : 0,
+      amount: Number.isFinite(amount) ? amount : 0,
+    };
+  }).filter(Boolean);
+
+  if (!rows.length) {
+    throw new HttpError(404, `Tushare日线解析后为空: ${tsCode}`);
+  }
+
+  rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  return {
+    meta: {
+      shortName: resolvePreferredStockName(stockCode, 'tushare.daily', toCnCoreCode(stockCode)),
+      dataSource: 'tushare.daily',
+      tsCode,
+      startDate: toCompactDateText(startDate),
+      endDate: toCompactDateText(endDate),
+    },
+    rows,
+  };
 }
 
 async function requestTencentCnDailyChart(stockCode, { limit = 300, fq = 'none' } = {}) {
@@ -664,11 +879,14 @@ async function requestTencentCnDailyChart(stockCode, { limit = 300, fq = 'none' 
   const url = new URL('https://web.ifzq.gtimg.cn/appstock/app/fqkline/get');
   url.searchParams.set('param', `${symbol},day,,,${Math.max(Number(limit) || 300, 120)},${safeFq}`);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (peng-stock-analysis stock-data tencent-kline)',
       Referer: 'https://gu.qq.com/',
     },
+  }, {
+    timeoutMs: 10000,
+    timeoutMessage: '腾讯日线请求超时',
   });
   if (!response.ok) {
     throw new HttpError(response.status, `腾讯日线请求失败: ${response.status}`);
@@ -821,11 +1039,14 @@ async function requestTencentRealtimeQuote(stockCode) {
   url.searchParams.set('q', symbol);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (peng-stock-analysis stock-data tencent)',
         Referer: 'https://gu.qq.com/',
       },
+    }, {
+      timeoutMs: 8000,
+      timeoutMessage: '腾讯实时行情请求超时',
     });
     if (!response.ok) {
       throw new HttpError(response.status, `腾讯实时行情请求失败: ${response.status}`);
@@ -883,10 +1104,13 @@ async function requestYahooChart(symbol, { range = '6mo', interval = '1d' } = {}
 
   let response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (peng-stock-analysis)',
       },
+    }, {
+      timeoutMs: 10000,
+      timeoutMessage: 'Yahoo行情请求超时',
     });
   } catch (error) {
     const message = String(error?.message || '');
@@ -974,10 +1198,13 @@ async function requestStooqChart(normalizedCode, days = 180) {
   url.searchParams.set('s', stooqSymbol);
   url.searchParams.set('i', 'd');
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (peng-stock-analysis)',
     },
+  }, {
+    timeoutMs: 10000,
+    timeoutMessage: 'Stooq请求超时',
   });
   if (!response.ok) {
     throw new HttpError(response.status, `Stooq 请求失败: ${response.status}`);
@@ -1077,7 +1304,7 @@ export const stockDataService = {
     return requestXTickMinuteSeries(stockCode, { limit });
   },
 
-  async getHistory(stockCode, { days = 180, interval = '1d' } = {}) {
+  async getHistory(stockCode, { days = 180, interval = '1d', localMode = 'auto' } = {}) {
     const normalized = normalizeStockCode(stockCode);
     const symbol = toYahooSymbol(normalized);
     const range = getRangeFromDays(days);
@@ -1088,11 +1315,13 @@ export const stockDataService = {
     let source = 'eastmoney.kline';
     if (market === 'CN_SH' || market === 'CN_SZ') {
       const canUseLocalDaily = String(interval || '1d').trim() === '1d';
+      const enforceCoverage = String(localMode || 'auto').trim() === 'coverage_first';
+      const enableMultiSourceFallback = String(env.STOCK_DAILY_MULTI_SOURCE_FALLBACK || 'true').trim().toLowerCase() !== 'false';
       if (canUseLocalDaily) {
         const localRows = readLocalDailyBars(normalized, preferredLimit);
         const latestLocalDate = localRows[localRows.length - 1]?.date || '';
         const looksFresh = latestLocalDate && daysFromToday(latestLocalDate) <= 10;
-        if (localRows.length >= requiredRows || (looksFresh && localRows.length >= 10)) {
+        if (localRows.length >= requiredRows || (!enforceCoverage && looksFresh && localRows.length >= 10)) {
           payload = {
             meta: {
               shortName: normalized,
@@ -1104,37 +1333,49 @@ export const stockDataService = {
         }
       }
       if (!payload) {
-      try {
-        payload = await requestEastmoneyCnDailyChart(normalized, {
-          limit: preferredLimit,
-        });
-      } catch (cnError) {
         try {
-          payload = await requestTencentCnDailyChart(normalized, {
-            limit: preferredLimit,
-            fq: 'none',
+          payload = await requestTushareCnDailyChart(normalized, {
+            days: preferredLimit,
           });
-          source = 'tencent.fqkline';
-          payload.meta.fallbackReason = cnError.message;
-        } catch (tencentError) {
+          source = 'tushare.daily';
+        } catch (tushareError) {
+          if (!enableMultiSourceFallback) {
+            throw new HttpError(502, `A股日线拉取失败(Tushare): ${tushareError.message}`);
+          }
           try {
-            payload = await requestYahooChart(symbol, { range, interval });
-            source = 'yahoo';
-            payload.meta.fallbackReason = `${cnError.message}; ${tencentError.message}`;
-          } catch (yahooError) {
+            payload = await requestEastmoneyCnDailyChart(normalized, {
+              limit: preferredLimit,
+            });
+            source = 'eastmoney.kline';
+            payload.meta.fallbackReason = tushareError.message;
+          } catch (cnError) {
             try {
-              payload = await requestStooqChart(normalized, days);
-              source = 'stooq';
-              payload.meta.fallbackReason = `${cnError.message}; ${tencentError.message}; ${yahooError.message}`;
-            } catch (stooqError) {
-              throw new HttpError(
-                502,
-                `A股日线拉取失败: ${cnError.message}; ${tencentError.message}; ${yahooError.message}; ${stooqError.message}`,
-              );
+              payload = await requestTencentCnDailyChart(normalized, {
+                limit: preferredLimit,
+                fq: 'none',
+              });
+              source = 'tencent.fqkline';
+              payload.meta.fallbackReason = `${tushareError.message}; ${cnError.message}`;
+            } catch (tencentError) {
+              try {
+                payload = await requestYahooChart(symbol, { range, interval });
+                source = 'yahoo';
+                payload.meta.fallbackReason = `${tushareError.message}; ${cnError.message}; ${tencentError.message}`;
+              } catch (yahooError) {
+                try {
+                  payload = await requestStooqChart(normalized, days);
+                  source = 'stooq';
+                  payload.meta.fallbackReason = `${tushareError.message}; ${cnError.message}; ${tencentError.message}; ${yahooError.message}`;
+                } catch (stooqError) {
+                  throw new HttpError(
+                    502,
+                    `A股日线拉取失败: ${tushareError.message}; ${cnError.message}; ${tencentError.message}; ${yahooError.message}; ${stooqError.message}`,
+                  );
+                }
+              }
             }
           }
         }
-      }
         if (payload?.rows?.length) {
           upsertLocalDailyBars(normalized, payload.rows, source);
         }

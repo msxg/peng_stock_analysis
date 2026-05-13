@@ -142,34 +142,6 @@ function createSchema(connection) {
       FOREIGN KEY (account_id) REFERENCES portfolio_accounts(id) ON DELETE CASCADE
     );
 
-    CREATE TABLE IF NOT EXISTS futures_categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      description TEXT,
-      sort_order INTEGER NOT NULL DEFAULT 100,
-      is_enabled INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS futures_symbols (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      category_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      quote_code TEXT NOT NULL,
-      market INTEGER NOT NULL,
-      code TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 100,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (category_id) REFERENCES futures_categories(id) ON DELETE CASCADE,
-      UNIQUE (category_id, market, code)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_futures_symbols_category ON futures_symbols (category_id, sort_order ASC, id ASC);
-    CREATE INDEX IF NOT EXISTS idx_futures_symbols_active ON futures_symbols (is_active, sort_order ASC, id ASC);
-
     CREATE TABLE IF NOT EXISTS futures_basics (
       quote_code TEXT PRIMARY KEY,
       market INTEGER,
@@ -205,6 +177,27 @@ function createSchema(connection) {
     CREATE INDEX IF NOT EXISTS idx_futures_intraday_lookup
       ON futures_intraday_bars (quote_code, timeframe, trade_day, bucket_ts ASC);
 
+    CREATE TABLE IF NOT EXISTS futures_eod_bars (
+      quote_code TEXT NOT NULL,
+      timeframe TEXT NOT NULL,
+      trade_day TEXT NOT NULL,
+      bucket_ts INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      open REAL,
+      high REAL,
+      low REAL,
+      close REAL,
+      volume REAL NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      source TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (quote_code, timeframe, bucket_ts)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_futures_eod_lookup
+      ON futures_eod_bars (quote_code, timeframe, trade_day, bucket_ts ASC);
+
     CREATE TABLE IF NOT EXISTS stock_basics (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       market TEXT NOT NULL,
@@ -234,7 +227,7 @@ function createSchema(connection) {
     CREATE INDEX IF NOT EXISTS idx_stock_basics_market_code ON stock_basics (market, code);
     CREATE INDEX IF NOT EXISTS idx_stock_basics_name ON stock_basics (name);
 
-    CREATE TABLE IF NOT EXISTS stock_monitor_categories (
+    CREATE TABLE IF NOT EXISTS monitor_categories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
       description TEXT,
@@ -244,22 +237,174 @@ function createSchema(connection) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS stock_monitor_symbols (
+    CREATE TABLE IF NOT EXISTS monitor_symbols (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       category_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      stock_code TEXT NOT NULL,
+      symbol_code TEXT NOT NULL,
+      quote_code TEXT,
+      symbol_type TEXT NOT NULL,
       market TEXT NOT NULL,
+      exchange TEXT,
+      display_name TEXT NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 100,
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (category_id) REFERENCES stock_monitor_categories(id) ON DELETE CASCADE,
-      UNIQUE (category_id, market, stock_code)
+      FOREIGN KEY (category_id) REFERENCES monitor_categories(id) ON DELETE CASCADE,
+      UNIQUE (category_id, symbol_type, market, symbol_code)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_stock_monitor_symbols_category ON stock_monitor_symbols (category_id, sort_order ASC, id ASC);
-    CREATE INDEX IF NOT EXISTS idx_stock_monitor_symbols_active ON stock_monitor_symbols (is_active, sort_order ASC, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_monitor_symbols_category ON monitor_symbols (category_id, sort_order ASC, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_monitor_symbols_active ON monitor_symbols (is_active, sort_order ASC, id ASC);
+
+    CREATE TABLE IF NOT EXISTS stock_intraday_bars (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      stock_code TEXT NOT NULL,
+      market TEXT,
+      ts_code TEXT,
+      timeframe TEXT NOT NULL,
+      trade_day TEXT NOT NULL,
+      bucket_ts INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      open REAL,
+      high REAL,
+      low REAL,
+      close REAL,
+      pre_close REAL,
+      change REAL,
+      pct_chg REAL,
+      vol REAL,
+      amount REAL,
+      source TEXT NOT NULL DEFAULT 'tushare.pro_bar',
+      synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (stock_code, timeframe, bucket_ts)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_lookup
+      ON stock_intraday_bars (stock_code, timeframe, trade_day, bucket_ts ASC);
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day
+      ON stock_intraday_bars (timeframe, trade_day);
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_bucket_code
+      ON stock_intraday_bars (timeframe, trade_day, bucket_ts DESC, stock_code ASC);
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_code
+      ON stock_intraday_bars (timeframe, trade_day, stock_code);
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_desc_bucket_code
+      ON stock_intraday_bars (timeframe, trade_day DESC, bucket_ts DESC, stock_code ASC);
+
+    CREATE TABLE IF NOT EXISTS stock_eod_bars (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      stock_code TEXT NOT NULL,
+      market TEXT,
+      ts_code TEXT,
+      timeframe TEXT NOT NULL,
+      trade_day TEXT NOT NULL,
+      bucket_ts INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      open REAL,
+      high REAL,
+      low REAL,
+      close REAL,
+      pre_close REAL,
+      change REAL,
+      pct_chg REAL,
+      vol REAL,
+      amount REAL,
+      source TEXT NOT NULL DEFAULT 'tushare.daily',
+      synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (stock_code, timeframe, trade_day)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_lookup
+      ON stock_eod_bars (stock_code, timeframe, trade_day, bucket_ts ASC);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day
+      ON stock_eod_bars (timeframe, trade_day);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_bucket_code
+      ON stock_eod_bars (timeframe, trade_day, bucket_ts DESC, stock_code ASC);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_code
+      ON stock_eod_bars (timeframe, trade_day, stock_code);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_desc_bucket_code
+      ON stock_eod_bars (timeframe, trade_day DESC, bucket_ts DESC, stock_code ASC);
+
+    CREATE TABLE IF NOT EXISTS market_sync_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_type TEXT NOT NULL,
+      trigger_type TEXT NOT NULL,
+      market_scope TEXT NOT NULL,
+      dataset_scope TEXT,
+      symbol_type TEXT,
+      timeframe TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      status TEXT NOT NULL,
+      requested_by TEXT,
+      params_json TEXT,
+      summary_json TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_market_sync_jobs_status
+      ON market_sync_jobs (status, created_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_market_sync_jobs_type_created
+      ON market_sync_jobs (job_type, created_at DESC, id DESC);
+
+    CREATE TABLE IF NOT EXISTS market_sync_job_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      symbol_code TEXT,
+      quote_code TEXT,
+      symbol_type TEXT,
+      market TEXT,
+      timeframe TEXT,
+      range_start TEXT,
+      range_end TEXT,
+      source_provider TEXT,
+      status TEXT NOT NULL,
+      bars_written INTEGER NOT NULL DEFAULT 0,
+      error_code TEXT,
+      error_message TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (job_id) REFERENCES market_sync_jobs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_market_sync_job_items_job
+      ON market_sync_job_items (job_id, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_market_sync_job_items_status
+      ON market_sync_job_items (status, created_at DESC, id DESC);
+
+    CREATE TABLE IF NOT EXISTS market_data_quality_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dataset_name TEXT NOT NULL,
+      symbol_type TEXT,
+      market TEXT,
+      timeframe TEXT NOT NULL,
+      scope_type TEXT NOT NULL,
+      scope_key TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      total_expected INTEGER NOT NULL DEFAULT 0,
+      total_actual INTEGER NOT NULL DEFAULT 0,
+      gap_count INTEGER NOT NULL DEFAULT 0,
+      anomaly_count INTEGER NOT NULL DEFAULT 0,
+      coverage_ratio REAL,
+      report_json TEXT,
+      generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_market_quality_reports_dataset
+      ON market_data_quality_reports (dataset_name, timeframe, generated_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_market_quality_reports_scope
+      ON market_data_quality_reports (scope_type, scope_key, generated_at DESC, id DESC);
 
     CREATE TABLE IF NOT EXISTS bluechip_pools (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -615,6 +760,366 @@ function hasTable(connection, tableName) {
   return Boolean(row?.name);
 }
 
+function hasUniqueIndex(connection, tableName, columns = []) {
+  const expected = columns.map((item) => String(item || '').trim()).filter(Boolean);
+  if (!expected.length) return false;
+  const indexes = connection.prepare(`PRAGMA index_list(${tableName})`).all();
+  return indexes.some((indexRow) => {
+    if (Number(indexRow?.unique) !== 1) return false;
+    const cols = connection.prepare(`PRAGMA index_info(${indexRow.name})`).all()
+      .sort((a, b) => Number(a.seqno || 0) - Number(b.seqno || 0))
+      .map((item) => String(item?.name || '').trim());
+    return cols.length === expected.length && cols.every((name, idx) => name === expected[idx]);
+  });
+}
+
+function countStockEodTradeDayDuplicates(connection) {
+  if (!hasTable(connection, 'stock_eod_bars')) return 0;
+  const row = connection.prepare(`
+    SELECT COUNT(*) AS total
+    FROM (
+      SELECT stock_code, timeframe, trade_day, COUNT(*) AS cnt
+      FROM stock_eod_bars
+      GROUP BY stock_code, timeframe, trade_day
+      HAVING cnt > 1
+    ) t
+  `).get();
+  return Number(row?.total || 0);
+}
+
+export function normalizeStockEodBarsForTradeDayUniq(connection) {
+  if (!hasTable(connection, 'stock_eod_bars')) return;
+
+  const hasTargetUnique = hasUniqueIndex(connection, 'stock_eod_bars', ['stock_code', 'timeframe', 'trade_day']);
+  const duplicateDays = countStockEodTradeDayDuplicates(connection);
+  if (hasTargetUnique && duplicateDays === 0) return;
+
+  const tx = connection.transaction(() => {
+    connection.exec('DROP TABLE IF EXISTS stock_eod_bars__new;');
+
+    connection.exec(`
+      CREATE TABLE stock_eod_bars__new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stock_code TEXT NOT NULL,
+        market TEXT,
+        ts_code TEXT,
+        timeframe TEXT NOT NULL,
+        trade_day TEXT NOT NULL,
+        bucket_ts INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        open REAL,
+        high REAL,
+        low REAL,
+        close REAL,
+        pre_close REAL,
+        change REAL,
+        pct_chg REAL,
+        vol REAL,
+        amount REAL,
+        source TEXT NOT NULL DEFAULT 'tushare.daily',
+        synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (stock_code, timeframe, trade_day)
+      );
+    `);
+
+    connection.exec(`
+      INSERT INTO stock_eod_bars__new (
+        stock_code, market, ts_code, timeframe, trade_day, bucket_ts, date,
+        open, high, low, close, pre_close, change, pct_chg, vol, amount, source, synced_at, created_at, updated_at
+      )
+      SELECT
+        stock_code,
+        market,
+        ts_code,
+        timeframe,
+        trade_day,
+        CAST(strftime('%s', trade_day || ' 00:00:00', '-8 hours') AS INTEGER) AS bucket_ts,
+        trade_day AS date,
+        open, high, low, close, pre_close, change, pct_chg, vol, amount, source,
+        COALESCE(synced_at, datetime('now')) AS synced_at,
+        COALESCE(created_at, datetime('now')) AS created_at,
+        COALESCE(updated_at, datetime('now')) AS updated_at
+      FROM (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY stock_code, timeframe, trade_day
+            ORDER BY datetime(COALESCE(updated_at, created_at, synced_at)) DESC, id DESC
+          ) AS rn
+        FROM stock_eod_bars
+        WHERE stock_code IS NOT NULL
+          AND timeframe IS NOT NULL
+          AND trade_day IS NOT NULL
+      ) ranked
+      WHERE rn = 1;
+    `);
+
+    connection.exec('DROP TABLE stock_eod_bars;');
+    connection.exec('ALTER TABLE stock_eod_bars__new RENAME TO stock_eod_bars;');
+    connection.exec(`
+      CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_lookup
+      ON stock_eod_bars (stock_code, timeframe, trade_day, bucket_ts ASC);
+      CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day
+      ON stock_eod_bars (timeframe, trade_day);
+      CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_bucket_code
+      ON stock_eod_bars (timeframe, trade_day, bucket_ts DESC, stock_code ASC);
+      CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_code
+      ON stock_eod_bars (timeframe, trade_day, stock_code);
+      CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_desc_bucket_code
+      ON stock_eod_bars (timeframe, trade_day DESC, bucket_ts DESC, stock_code ASC);
+    `);
+  });
+
+  tx();
+}
+
+function toFuturesMarketTag(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'FUTURES_UNKNOWN';
+  const match = raw.match(/(\d{2,3})/);
+  return match ? `FUTURES_${match[1]}` : `FUTURES_${raw.toUpperCase()}`;
+}
+
+function migrateLegacyMonitorConfig(connection) {
+  if (!hasTable(connection, 'monitor_categories') || !hasTable(connection, 'monitor_symbols')) return;
+
+  const legacyStockCount = hasTable(connection, 'stock_monitor_symbols')
+    ? Number(connection.prepare('SELECT COUNT(*) AS total FROM stock_monitor_symbols').get()?.total || 0)
+    : 0;
+  const legacyFuturesCount = hasTable(connection, 'futures_symbols')
+    ? Number(connection.prepare('SELECT COUNT(*) AS total FROM futures_symbols').get()?.total || 0)
+    : 0;
+  const targetStockCount = Number(connection.prepare(`
+    SELECT COUNT(*) AS total
+    FROM monitor_symbols
+    WHERE LOWER(symbol_type) = 'stock'
+  `).get()?.total || 0);
+  const targetFuturesCount = Number(connection.prepare(`
+    SELECT COUNT(*) AS total
+    FROM monitor_symbols
+    WHERE LOWER(symbol_type) = 'futures'
+  `).get()?.total || 0);
+  if (
+    legacyStockCount <= targetStockCount
+    && legacyFuturesCount <= targetFuturesCount
+    && (legacyStockCount + legacyFuturesCount) > 0
+  ) {
+    return;
+  }
+
+  const insertCategory = connection.prepare(`
+    INSERT INTO monitor_categories (name, description, sort_order, is_enabled, created_at, updated_at)
+    VALUES (
+      @name,
+      @description,
+      @sortOrder,
+      @isEnabled,
+      COALESCE(@createdAt, datetime('now')),
+      COALESCE(@updatedAt, datetime('now'))
+    )
+    ON CONFLICT(name) DO UPDATE SET
+      description = COALESCE(excluded.description, monitor_categories.description),
+      sort_order = excluded.sort_order,
+      is_enabled = excluded.is_enabled,
+      updated_at = excluded.updated_at
+  `);
+  const getCategoryId = connection.prepare('SELECT id FROM monitor_categories WHERE name = ? LIMIT 1');
+  const insertSymbol = connection.prepare(`
+    INSERT INTO monitor_symbols (
+      category_id, symbol_code, quote_code, symbol_type, market, exchange, display_name, sort_order, is_active, created_at, updated_at
+    )
+    VALUES (
+      @categoryId, @symbolCode, @quoteCode, @symbolType, @market, @exchange, @displayName, @sortOrder, @isActive,
+      COALESCE(@createdAt, datetime('now')), COALESCE(@updatedAt, datetime('now'))
+    )
+    ON CONFLICT(category_id, symbol_type, market, symbol_code) DO UPDATE SET
+      quote_code = excluded.quote_code,
+      display_name = excluded.display_name,
+      sort_order = excluded.sort_order,
+      is_active = excluded.is_active,
+      updated_at = excluded.updated_at
+  `);
+
+  const tx = connection.transaction(() => {
+    if (hasTable(connection, 'stock_monitor_categories')) {
+      const categories = connection.prepare(`
+        SELECT id, name, description, sort_order, is_enabled, created_at, updated_at
+        FROM stock_monitor_categories
+      `).all();
+      const symbols = hasTable(connection, 'stock_monitor_symbols')
+        ? connection.prepare(`
+          SELECT category_id, stock_code, market, name, sort_order, is_active, created_at, updated_at
+          FROM stock_monitor_symbols
+        `).all()
+        : [];
+
+      const categoryIdMap = new Map();
+      categories.forEach((item) => {
+        insertCategory.run({
+          name: item.name,
+          description: item.description || null,
+          sortOrder: item.sort_order ?? 100,
+          isEnabled: item.is_enabled ?? 1,
+          createdAt: item.created_at || null,
+          updatedAt: item.updated_at || null,
+        });
+        const mapped = getCategoryId.get(item.name);
+        if (mapped?.id) categoryIdMap.set(item.id, mapped.id);
+      });
+
+      symbols.forEach((item) => {
+        const targetCategoryId = categoryIdMap.get(item.category_id);
+        if (!targetCategoryId) return;
+        insertSymbol.run({
+          categoryId: targetCategoryId,
+          symbolCode: String(item.stock_code || '').trim(),
+          quoteCode: String(item.stock_code || '').trim() || null,
+          symbolType: 'stock',
+          market: String(item.market || 'A').trim().toUpperCase() || 'A',
+          exchange: null,
+          displayName: String(item.name || item.stock_code || '').trim() || String(item.stock_code || '').trim(),
+          sortOrder: item.sort_order ?? 100,
+          isActive: item.is_active ?? 1,
+          createdAt: item.created_at || null,
+          updatedAt: item.updated_at || null,
+        });
+      });
+    }
+
+    if (hasTable(connection, 'futures_categories')) {
+      const categories = connection.prepare(`
+        SELECT id, name, description, sort_order, is_enabled, created_at, updated_at
+        FROM futures_categories
+      `).all();
+      const symbols = hasTable(connection, 'futures_symbols')
+        ? connection.prepare(`
+          SELECT category_id, quote_code, market, code, name, sort_order, is_active, created_at, updated_at
+          FROM futures_symbols
+        `).all()
+        : [];
+
+      const categoryIdMap = new Map();
+      categories.forEach((item) => {
+        const categoryName = `期货-${item.name}`;
+        insertCategory.run({
+          name: categoryName,
+          description: item.description || null,
+          sortOrder: item.sort_order ?? 100,
+          isEnabled: item.is_enabled ?? 1,
+          createdAt: item.created_at || null,
+          updatedAt: item.updated_at || null,
+        });
+        const mapped = getCategoryId.get(categoryName);
+        if (mapped?.id) categoryIdMap.set(item.id, mapped.id);
+      });
+
+      symbols.forEach((item) => {
+        const targetCategoryId = categoryIdMap.get(item.category_id);
+        if (!targetCategoryId) return;
+        const quoteCode = String(item.quote_code || '').trim().toUpperCase();
+        const symbolCode = String(item.code || quoteCode).trim().toUpperCase();
+        insertSymbol.run({
+          categoryId: targetCategoryId,
+          symbolCode,
+          quoteCode: quoteCode || null,
+          symbolType: 'futures',
+          market: toFuturesMarketTag(item.market),
+          exchange: null,
+          displayName: String(item.name || symbolCode || quoteCode).trim() || symbolCode || quoteCode,
+          sortOrder: item.sort_order ?? 100,
+          isActive: item.is_active ?? 1,
+          createdAt: item.created_at || null,
+          updatedAt: item.updated_at || null,
+        });
+      });
+    }
+  });
+
+  tx();
+}
+
+function migrateLegacyStockDailyBars(connection) {
+  if (!hasTable(connection, 'stock_daily_bars') || !hasTable(connection, 'stock_eod_bars')) return;
+  const legacyCount = Number(connection.prepare('SELECT COUNT(*) AS total FROM stock_daily_bars').get()?.total || 0);
+  if (legacyCount <= 0) return;
+  const migratedCount = Number(connection.prepare(`
+    SELECT COUNT(*) AS total
+    FROM stock_eod_bars
+    WHERE timeframe = '1d'
+  `).get()?.total || 0);
+  if (migratedCount >= legacyCount) return;
+
+  connection.exec(`
+    INSERT INTO stock_eod_bars (
+      stock_code, market, ts_code, timeframe, trade_day, bucket_ts, date, open, high, low, close, pre_close, change, pct_chg, vol, amount, source, synced_at, created_at, updated_at
+    )
+    SELECT
+      stock_code,
+      NULL AS market,
+      ts_code,
+      '1d' AS timeframe,
+      substr(trade_date, 1, 4) || '-' || substr(trade_date, 5, 2) || '-' || substr(trade_date, 7, 2) AS trade_day,
+      CAST(strftime('%s', substr(trade_date, 1, 4) || '-' || substr(trade_date, 5, 2) || '-' || substr(trade_date, 7, 2) || ' 00:00:00') AS INTEGER) AS bucket_ts,
+      substr(trade_date, 1, 4) || '-' || substr(trade_date, 5, 2) || '-' || substr(trade_date, 7, 2) AS date,
+      open, high, low, close, pre_close, change, pct_chg, vol, amount, source,
+      COALESCE(synced_at, datetime('now')) AS synced_at,
+      COALESCE(created_at, datetime('now')) AS created_at,
+      COALESCE(updated_at, datetime('now')) AS updated_at
+    FROM stock_daily_bars
+    WHERE stock_code IS NOT NULL
+      AND trade_date IS NOT NULL
+      AND LENGTH(trade_date) = 8
+    ON CONFLICT(stock_code, timeframe, trade_day) DO UPDATE SET
+      ts_code = excluded.ts_code,
+      bucket_ts = excluded.bucket_ts,
+      date = excluded.date,
+      open = excluded.open,
+      high = excluded.high,
+      low = excluded.low,
+      close = excluded.close,
+      pre_close = excluded.pre_close,
+      change = excluded.change,
+      pct_chg = excluded.pct_chg,
+      vol = excluded.vol,
+      amount = excluded.amount,
+      source = excluded.source,
+      synced_at = excluded.synced_at,
+      updated_at = datetime('now')
+  `);
+}
+
+function ensureMarketDataPerformanceIndexes(connection) {
+  connection.exec(`
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day
+      ON stock_intraday_bars (timeframe, trade_day);
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_bucket_code
+      ON stock_intraday_bars (timeframe, trade_day, bucket_ts DESC, stock_code ASC);
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_code
+      ON stock_intraday_bars (timeframe, trade_day, stock_code);
+    CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_tf_day_desc_bucket_code
+      ON stock_intraday_bars (timeframe, trade_day DESC, bucket_ts DESC, stock_code ASC);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day
+      ON stock_eod_bars (timeframe, trade_day);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_bucket_code
+      ON stock_eod_bars (timeframe, trade_day, bucket_ts DESC, stock_code ASC);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_code
+      ON stock_eod_bars (timeframe, trade_day, stock_code);
+    CREATE INDEX IF NOT EXISTS idx_stock_eod_bars_tf_day_desc_bucket_code
+      ON stock_eod_bars (timeframe, trade_day DESC, bucket_ts DESC, stock_code ASC);
+  `);
+}
+
+function dropLegacyMonitorTables(connection) {
+  connection.exec(`
+    DROP TABLE IF EXISTS futures_symbols;
+    DROP TABLE IF EXISTS futures_categories;
+    DROP TABLE IF EXISTS stock_monitor_symbols;
+    DROP TABLE IF EXISTS stock_monitor_categories;
+  `);
+}
+
 function ensureMigrations(connection) {
   if (!hasColumn(connection, 'backtest_results', 'tp_hit')) {
     connection.exec('ALTER TABLE backtest_results ADD COLUMN tp_hit INTEGER DEFAULT 0');
@@ -646,12 +1151,16 @@ function ensureMigrations(connection) {
     }
   });
 
-  if (!hasColumn(connection, 'futures_categories', 'is_enabled')) {
+  if (hasTable(connection, 'futures_categories') && !hasColumn(connection, 'futures_categories', 'is_enabled')) {
     connection.exec('ALTER TABLE futures_categories ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1');
   }
 
-  if (!hasColumn(connection, 'stock_monitor_categories', 'is_enabled')) {
+  if (hasTable(connection, 'stock_monitor_categories') && !hasColumn(connection, 'stock_monitor_categories', 'is_enabled')) {
     connection.exec('ALTER TABLE stock_monitor_categories ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1');
+  }
+
+  if (hasTable(connection, 'monitor_categories') && !hasColumn(connection, 'monitor_categories', 'is_enabled')) {
+    connection.exec('ALTER TABLE monitor_categories ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1');
   }
 
   if (!hasColumn(connection, 'news_items', 'meta_json')) {
@@ -683,6 +1192,12 @@ function ensureMigrations(connection) {
       connection.exec('ALTER TABLE news_scheduler_states ADD COLUMN last_result_json TEXT');
     }
   }
+
+  migrateLegacyMonitorConfig(connection);
+  migrateLegacyStockDailyBars(connection);
+  normalizeStockEodBarsForTradeDayUniq(connection);
+  ensureMarketDataPerformanceIndexes(connection);
+  dropLegacyMonitorTables(connection);
 }
 
 function seedDefaults(connection) {
@@ -712,37 +1227,37 @@ function seedDefaults(connection) {
   tx(DEFAULT_SYSTEM_CONFIGS);
 
   connection.prepare(`
-    INSERT INTO futures_categories (name, description, sort_order, created_at, updated_at)
-    VALUES ('有色金属', '默认有色期货观察分类', 10, datetime('now'), datetime('now'))
+    INSERT INTO monitor_categories (name, description, sort_order, is_enabled, created_at, updated_at)
+    VALUES ('自选监控', '统一监控默认分类', 10, 1, datetime('now'), datetime('now'))
     ON CONFLICT(name) DO NOTHING
   `).run();
 
-  const nonFerrous = connection.prepare('SELECT id FROM futures_categories WHERE name = ?').get('有色金属');
-  if (nonFerrous?.id) {
+  const unifiedWatchlist = connection.prepare('SELECT id FROM monitor_categories WHERE name = ?').get('自选监控');
+  if (unifiedWatchlist?.id) {
     connection.prepare(`
-      INSERT INTO futures_symbols (
-        category_id, name, quote_code, market, code, sort_order, is_active, created_at, updated_at
+      INSERT INTO monitor_symbols (
+        category_id, symbol_code, quote_code, symbol_type, market, exchange, display_name, sort_order, is_active, created_at, updated_at
       )
-      VALUES (?, '白银主连', '101.SI00Y', 101, 'SI00Y', 10, 1, datetime('now'), datetime('now'))
-      ON CONFLICT(category_id, market, code) DO NOTHING
-    `).run(nonFerrous.id);
+      VALUES (?, '600519', '600519', 'stock', 'A', NULL, '贵州茅台', 10, 1, datetime('now'), datetime('now'))
+      ON CONFLICT(category_id, symbol_type, market, symbol_code) DO NOTHING
+    `).run(unifiedWatchlist.id);
   }
 
   connection.prepare(`
-    INSERT INTO stock_monitor_categories (name, description, sort_order, created_at, updated_at)
-    VALUES ('自选股票', '默认股票监测分类', 10, datetime('now'), datetime('now'))
+    INSERT INTO monitor_categories (name, description, sort_order, is_enabled, created_at, updated_at)
+    VALUES ('期货-有色金属', '默认有色期货观察分类', 20, 1, datetime('now'), datetime('now'))
     ON CONFLICT(name) DO NOTHING
   `).run();
 
-  const watchlist = connection.prepare('SELECT id FROM stock_monitor_categories WHERE name = ?').get('自选股票');
-  if (watchlist?.id) {
+  const unifiedFutures = connection.prepare('SELECT id FROM monitor_categories WHERE name = ?').get('期货-有色金属');
+  if (unifiedFutures?.id) {
     connection.prepare(`
-      INSERT INTO stock_monitor_symbols (
-        category_id, name, stock_code, market, sort_order, is_active, created_at, updated_at
+      INSERT INTO monitor_symbols (
+        category_id, symbol_code, quote_code, symbol_type, market, exchange, display_name, sort_order, is_active, created_at, updated_at
       )
-      VALUES (?, '贵州茅台', '600519', 'A', 10, 1, datetime('now'), datetime('now'))
-      ON CONFLICT(category_id, market, stock_code) DO NOTHING
-    `).run(watchlist.id);
+      VALUES (?, 'SI00Y', '101.SI00Y', 'futures', 'FUTURES_101', NULL, '白银主连', 10, 1, datetime('now'), datetime('now'))
+      ON CONFLICT(category_id, symbol_type, market, symbol_code) DO NOTHING
+    `).run(unifiedFutures.id);
   }
 
   connection.prepare(`
