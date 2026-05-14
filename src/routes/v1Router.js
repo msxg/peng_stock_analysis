@@ -20,6 +20,7 @@ import { marketMetricsController } from '../controllers/marketMetricsController.
 import { focusNewsController } from '../controllers/focusNewsController.js';
 import { blueChipModeController } from '../controllers/blueChipModeController.js';
 import { bluechipPoolController } from '../controllers/bluechipPoolController.js';
+import { stockScreeningController } from '../controllers/stockScreeningController.js';
 
 const upload = multer({ dest: 'tmp/uploads' });
 const router = Router();
@@ -126,6 +127,9 @@ router.put('/market-metrics/rules/:ruleId', marketMetricsController.updateRule);
 router.get('/market-metrics/daily', marketMetricsController.daily);
 router.get('/market-metrics/daily/range', marketMetricsController.dailyRange);
 router.post('/market-metrics/compute', marketMetricsController.compute);
+router.post('/stock-screening/query', stockScreeningController.query);
+router.post('/stock-screening/actions/add-to-monitor', asyncHandler(stockScreeningController.addToMonitor));
+router.post('/stock-screening/actions/add-to-bluechip-pool', stockScreeningController.addToBluechipPool);
 
 router.get('/usage/summary', usageController.summary);
 
