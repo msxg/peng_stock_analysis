@@ -31,6 +31,8 @@ const LOCAL_DEFAULTS = {
   failPrevHighDays: 8,
   longHalfReferenceMode: 'first_long_bull_after_start_buy',
 };
+const DEFAULT_MAX_ANALYZE_COUNT = 500;
+const MAX_MAX_ANALYZE_COUNT = 5000;
 
 const LONG_HALF_REFERENCE_OPTIONS = [
   { value: 'recent_long_bull', label: '最近长阳半体' },
@@ -82,6 +84,12 @@ function fmtPct(value, digits = 2) {
   return `${n > 0 ? '+' : ''}${n.toFixed(digits)}%`;
 }
 
+function normalizeMaxAnalyzeCount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_MAX_ANALYZE_COUNT;
+  return Math.max(1, Math.min(MAX_MAX_ANALYZE_COUNT, Math.round(n)));
+}
+
 export function BluechipBatchPanel() {
   const [defaultsLoaded, setDefaultsLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -95,11 +103,13 @@ export function BluechipBatchPanel() {
 
   const [indexCode, setIndexCode] = useState('AVG_CN');
   const [concurrency, setConcurrency] = useState(3);
+  const [maxAnalyzeCount, setMaxAnalyzeCount] = useState(DEFAULT_MAX_ANALYZE_COUNT);
   const [params, setParams] = useState(LOCAL_DEFAULTS);
 
   const [result, setResult] = useState(null);
   const [activeTab, setActiveTab] = useState('signals');
   const [keyword, setKeyword] = useState('');
+  const [sideFilter, setSideFilter] = useState('all');
   const [saving, setSaving] = useState(false);
 
   async function refreshPoolData() {
@@ -159,13 +169,16 @@ export function BluechipBatchPanel() {
   const filteredSignals = useMemo(() => {
     const rows = Array.isArray(result?.signals) ? result.signals : [];
     const q = String(keyword || '').trim().toLowerCase();
-    if (!q) return rows;
     return rows.filter((item) => {
+      if (sideFilter !== 'all' && String(item?.side || '') !== sideFilter) {
+        return false;
+      }
+      if (!q) return true;
       const fields = [item.code, item.name, item.type, SIGNAL_LABEL[item.type] || '', item.reason, item.date]
         .map((v) => String(v || '').toLowerCase());
       return fields.some((v) => v.includes(q));
     });
-  }, [result?.signals, keyword]);
+  }, [result?.signals, keyword, sideFilter]);
 
   const filteredStocks = useMemo(() => {
     const rows = Array.isArray(result?.stocks) ? result.stocks : [];
@@ -217,6 +230,7 @@ export function BluechipBatchPanel() {
         codesText,
         indexCode,
         concurrency,
+        maxAnalyzeCount: normalizeMaxAnalyzeCount(maxAnalyzeCount),
         days: toNum(params.days, LOCAL_DEFAULTS.days),
         params: normalizeParams(params),
       }, { timeoutMs });
@@ -447,6 +461,16 @@ export function BluechipBatchPanel() {
                 onChange={(event) => setConcurrency(event.target.value === '' ? '' : Number(event.target.value))}
               />
             </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">分析上限</label>
+              <Input
+                type="number"
+                min={1}
+                max={MAX_MAX_ANALYZE_COUNT}
+                value={maxAnalyzeCount}
+                onChange={(event) => setMaxAnalyzeCount(event.target.value === '' ? '' : Number(event.target.value))}
+              />
+            </div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-4">
@@ -518,6 +542,11 @@ export function BluechipBatchPanel() {
           </div>
 
           {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
+          {result?.request?.truncated ? (
+            <p className="text-sm text-amber-600">
+              本次代码池共 {result?.request?.totalRequested || 0} 只，受分析上限 {result?.request?.maxAnalyzeCount || DEFAULT_MAX_ANALYZE_COUNT} 限制，实际分析 {result?.request?.totalAnalyzed || 0} 只（截断 {result?.request?.truncatedCount || 0} 只）。
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -528,6 +557,8 @@ export function BluechipBatchPanel() {
             <CardDescription>
               指数：{result?.index?.name || result?.index?.code || '--'}
               ，模式：{result?.request?.analysisMode === 'today' ? '今日分析' : '历史分析'}
+              ，请求 {result?.request?.totalRequested || 0}
+              ，分析 {result?.request?.totalAnalyzed || 0}
               ，成功 {result?.stats?.success || 0}/{result?.stats?.total || 0}
               ，有信号 {result?.stats?.withSignal || 0}
               ，当日有信号 {result?.stats?.withTodaySignal || 0}
@@ -562,6 +593,18 @@ export function BluechipBatchPanel() {
                     className="pl-9"
                   />
                 </div>
+                {activeTab === 'signals' ? (
+                  <Select value={sideFilter} onValueChange={setSideFilter}>
+                    <SelectTrigger className="w-[170px]">
+                      <SelectValue placeholder="方向" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">方向：全部</SelectItem>
+                      <SelectItem value="buy">方向：买点</SelectItem>
+                      <SelectItem value="sell">方向：卖点</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : null}
                 <Button
                   variant="outline"
                   type="button"

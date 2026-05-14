@@ -14,6 +14,12 @@ function parseDays(input) {
   return Math.max(30, Math.min(1000, Math.round(n)));
 }
 
+function parseMaxAnalyzeCount(input) {
+  const n = Number(input);
+  if (!Number.isFinite(n)) return 500;
+  return Math.max(1, Math.min(5000, Math.round(n)));
+}
+
 function toNum(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -164,11 +170,12 @@ export const blueChipModeController = {
     const analysisMode = String(payload.analysisMode || 'history').trim().toLowerCase() === 'today' ? 'today' : 'history';
     const days = parseDays(payload.days ?? payload.params?.days);
     const concurrency = Math.max(1, Math.min(8, Math.round(Number(payload.concurrency) || 3)));
+    const maxAnalyzeCount = parseMaxAnalyzeCount(payload.maxAnalyzeCount);
     const picked = await pickBatchCodes(payload);
     if (!picked.codes.length) {
       throw new HttpError(400, '未提供有效股票代码');
     }
-    const limitedCodes = picked.codes.slice(0, 500);
+    const limitedCodes = picked.codes.slice(0, maxAnalyzeCount);
 
     const includeTodayRealtime = analysisMode === 'today';
     const indexRaw = await resolveIndexRaw(indexCode, { days, includeTodayRealtime });
@@ -282,8 +289,11 @@ export const blueChipModeController = {
         poolId: picked.poolId,
         poolCode: picked.poolCode,
         poolName: picked.poolName,
+        maxAnalyzeCount,
         totalRequested: picked.codes.length,
         totalAnalyzed: limitedCodes.length,
+        truncated: picked.codes.length > limitedCodes.length,
+        truncatedCount: Math.max(picked.codes.length - limitedCodes.length, 0),
         days,
         concurrency,
       },
