@@ -25,6 +25,35 @@ function assertPoolCode(code = '') {
   return normalized;
 }
 
+function nowCompact() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}_${hh}${mi}${ss}`;
+}
+
+function randomSuffix(size = 4) {
+  return Math.random().toString(36).slice(2, 2 + size).toUpperCase().padEnd(size, 'X');
+}
+
+function generatePoolCode() {
+  return assertPoolCode(`POOL_${nowCompact()}_${randomSuffix(4)}`);
+}
+
+function generateUniquePoolCode() {
+  for (let i = 0; i < 20; i += 1) {
+    const code = generatePoolCode();
+    if (!bluechipPoolRepository.getPoolByCode(code)) {
+      return code;
+    }
+  }
+  return assertPoolCode(`POOL_${Date.now()}_${randomSuffix(6)}`);
+}
+
 function normalizePoolStockCode(code = '') {
   const normalized = normalizeStockCode(code);
   const market = inferMarket(normalized);
@@ -71,9 +100,9 @@ export const bluechipPoolService = {
   },
 
   createPool(payload = {}) {
-    const code = assertPoolCode(payload.code);
     const name = String(payload.name || '').trim();
     if (!name) throw new HttpError(400, '标的池名称不能为空');
+    const code = generateUniquePoolCode();
 
     try {
       return bluechipPoolRepository.createPool({
@@ -97,13 +126,12 @@ export const bluechipPoolService = {
     const existing = bluechipPoolRepository.getPoolById(id);
     if (!existing) throw new HttpError(404, `标的池不存在: ${id}`);
 
-    const nextCode = assertPoolCode(Object.prototype.hasOwnProperty.call(payload, 'code') ? payload.code : existing.code);
     const nextName = String(Object.prototype.hasOwnProperty.call(payload, 'name') ? payload.name : existing.name).trim();
     if (!nextName) throw new HttpError(400, '标的池名称不能为空');
 
     try {
       return bluechipPoolRepository.updatePool(id, {
-        code: nextCode,
+        code: existing.code,
         name: nextName,
         description: Object.prototype.hasOwnProperty.call(payload, 'description') ? payload.description : existing.description,
         sortOrder: Object.prototype.hasOwnProperty.call(payload, 'sortOrder') ? payload.sortOrder : existing.sortOrder,
@@ -113,7 +141,7 @@ export const bluechipPoolService = {
       });
     } catch (error) {
       if (String(error?.message || '').includes('UNIQUE')) {
-        throw new HttpError(409, `标的池编码或名称重复: ${nextCode}`);
+        throw new HttpError(409, `标的池编码或名称重复: ${existing.code}`);
       }
       throw error;
     }

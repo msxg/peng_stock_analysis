@@ -357,7 +357,6 @@ export function StockScreeningPanel() {
   const [selectingAll, setSelectingAll] = useState(false);
   const [allResultSelected, setAllResultSelected] = useState(false);
   const [creatingPool, setCreatingPool] = useState(false);
-  const [newPoolCode, setNewPoolCode] = useState('');
   const [newPoolName, setNewPoolName] = useState('');
   const [showPoolCreate, setShowPoolCreate] = useState(false);
 
@@ -602,10 +601,9 @@ export function StockScreeningPanel() {
   }
 
   async function createBluechipPoolInline() {
-    const code = String(newPoolCode || '').trim().toUpperCase().replace(/\s+/g, '_');
     const name = String(newPoolName || '').trim();
-    if (!code || !name) {
-      setMessage('请填写标的池编码和名称');
+    if (!name) {
+      setMessage('请填写标的池名称');
       return;
     }
 
@@ -613,7 +611,6 @@ export function StockScreeningPanel() {
     setMessage('');
     try {
       const created = await clientApi.strategy.createBluechipPool({
-        code,
         name,
         description: '条件选股页面快捷创建',
         isEnabled: true,
@@ -626,10 +623,9 @@ export function StockScreeningPanel() {
         ...prev,
         bluechipPoolId: created?.id ? String(created.id) : prev.bluechipPoolId,
       }));
-      setNewPoolCode('');
       setNewPoolName('');
       setShowPoolCreate(false);
-      setMessage(`标的池已创建并选中：${created?.name || name} (${created?.code || code})`);
+      setMessage(`标的池已创建并选中：${created?.name || name} (${created?.code || '--'})`);
     } catch (error) {
       setMessage(`创建标的池失败：${error.message || '未知错误'}`);
     } finally {
@@ -873,12 +869,6 @@ export function StockScreeningPanel() {
             </div>
             {showPoolCreate ? (
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Input
-                  className="w-56"
-                  value={newPoolCode}
-                  onChange={(e) => setNewPoolCode(e.target.value)}
-                  placeholder="新池编码，如 MY_POOL"
-                />
                 <Input
                   className="w-56"
                   value={newPoolName}

@@ -17,13 +17,15 @@ export function BluechipPoolConfigPanel() {
   const [allPools, setAllPools] = useState([]);
   const [managePoolId, setManagePoolId] = useState('');
   const [symbolPoolId, setSymbolPoolId] = useState('');
-  const [poolForm, setPoolForm] = useState({ code: '', name: '', description: '' });
+  const [poolForm, setPoolForm] = useState({ name: '', description: '' });
   const [symbolForm, setSymbolForm] = useState({ stockCode: '', stockName: '' });
   const [symbolKeyword, setSymbolKeyword] = useState('');
   const [symbolSuggestions, setSymbolSuggestions] = useState([]);
   const [symbolSuggesting, setSymbolSuggesting] = useState(false);
   const [symbolSuggestError, setSymbolSuggestError] = useState('');
   const [symbolListKeyword, setSymbolListKeyword] = useState('');
+  const [symbolPage, setSymbolPage] = useState(1);
+  const [symbolPageSize, setSymbolPageSize] = useState(20);
   const [editingSymbolId, setEditingSymbolId] = useState('');
   const [editingSymbolForm, setEditingSymbolForm] = useState({ stockCode: '', stockName: '' });
 
@@ -65,11 +67,10 @@ export function BluechipPoolConfigPanel() {
 
   useEffect(() => {
     if (!selectedManagePool) {
-      setPoolForm({ code: '', name: '', description: '' });
+      setPoolForm({ name: '', description: '' });
       return;
     }
     setPoolForm({
-      code: selectedManagePool.code || '',
       name: selectedManagePool.name || '',
       description: selectedManagePool.description || '',
     });
@@ -83,7 +84,12 @@ export function BluechipPoolConfigPanel() {
     setSymbolSuggestions([]);
     setSymbolSuggestError('');
     setSymbolListKeyword('');
+    setSymbolPage(1);
   }, [symbolPoolId]);
+
+  useEffect(() => {
+    setSymbolPage(1);
+  }, [symbolListKeyword, symbolPageSize]);
 
   useEffect(() => {
     if (activeTab !== 'symbols') return undefined;
@@ -130,11 +136,30 @@ export function BluechipPoolConfigPanel() {
     });
   }, [selectedSymbolPool?.symbols, symbolListKeyword]);
 
+  const symbolTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredSymbols.length / Math.max(1, Number(symbolPageSize) || 1))),
+    [filteredSymbols.length, symbolPageSize],
+  );
+
+  useEffect(() => {
+    setSymbolPage((prev) => {
+      if (prev > symbolTotalPages) return symbolTotalPages;
+      if (prev < 1) return 1;
+      return prev;
+    });
+  }, [symbolTotalPages]);
+
+  const pagedSymbols = useMemo(() => {
+    const page = Math.max(1, Math.min(symbolPage, symbolTotalPages));
+    const size = Math.max(1, Number(symbolPageSize) || 1);
+    const start = (page - 1) * size;
+    return filteredSymbols.slice(start, start + size);
+  }, [filteredSymbols, symbolPage, symbolPageSize, symbolTotalPages]);
+
   async function handleCreatePool() {
-    const code = String(poolForm.code || '').trim().toUpperCase();
     const name = String(poolForm.name || '').trim();
-    if (!code || !name) {
-      setError('请填写标的池编码和名称');
+    if (!name) {
+      setError('请填写标的池名称');
       return;
     }
     setSaving(true);
@@ -142,7 +167,6 @@ export function BluechipPoolConfigPanel() {
     setNotice('');
     try {
       await clientApi.strategy.createBluechipPool({
-        code,
         name,
         description: String(poolForm.description || '').trim(),
         isEnabled: true,
@@ -161,10 +185,9 @@ export function BluechipPoolConfigPanel() {
       setError('请先选择一个标的池');
       return;
     }
-    const code = String(poolForm.code || selectedManagePool.code || '').trim().toUpperCase();
     const name = String(poolForm.name || selectedManagePool.name || '').trim();
-    if (!code || !name) {
-      setError('请填写标的池编码和名称');
+    if (!name) {
+      setError('请填写标的池名称');
       return;
     }
     setSaving(true);
@@ -172,7 +195,6 @@ export function BluechipPoolConfigPanel() {
     setNotice('');
     try {
       await clientApi.strategy.updateBluechipPool(selectedManagePool.id, {
-        code,
         name,
         description: String(poolForm.description || '').trim(),
       });
@@ -362,9 +384,10 @@ export function BluechipPoolConfigPanel() {
                   <div>
                     <label className="mb-1 block text-xs text-muted-foreground">编码</label>
                     <Input
-                      value={poolForm.code}
-                      onChange={(event) => setPoolForm((prev) => ({ ...prev, code: event.target.value.toUpperCase() }))}
-                      placeholder="例如 KC50_ALL"
+                      value={selectedManagePool?.code || ''}
+                      placeholder="创建后自动生成"
+                      readOnly
+                      disabled
                     />
                   </div>
                   <div>
@@ -402,9 +425,16 @@ export function BluechipPoolConfigPanel() {
           ) : (
             <div className="space-y-3">
               <div className="rounded-lg border border-border/70 p-3">
-                <div className="grid gap-3 md:grid-cols-[1fr_2fr]">
+                <div className="grid gap-3">
                   <div>
-                    <label className="mb-1 block text-xs text-muted-foreground">标的池（必选）</label>
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <label className="text-xs text-muted-foreground">标的池（必选）</label>
+                      <span className="text-xs text-muted-foreground">
+                        {selectedSymbolPool
+                          ? `当前管理：${selectedSymbolPool.name}（${selectedSymbolPool.code}），共 ${Array.isArray(selectedSymbolPool.symbols) ? selectedSymbolPool.symbols.filter((sym) => sym?.isActive !== false).length : 0} 只`
+                          : '请先选择一个标的池'}
+                      </span>
+                    </div>
                     <Select value={symbolPoolId} onValueChange={setSymbolPoolId}>
                       <SelectTrigger className="w-full">
                         <SelectValue placeholder="请选择标的池" />
@@ -417,11 +447,6 @@ export function BluechipPoolConfigPanel() {
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
-                  <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-                    {selectedSymbolPool
-                      ? `当前管理：${selectedSymbolPool.name}（${selectedSymbolPool.code}），共 ${Array.isArray(selectedSymbolPool.symbols) ? selectedSymbolPool.symbols.filter((sym) => sym?.isActive !== false).length : 0} 只`
-                      : '请先选择一个标的池'}
                   </div>
                 </div>
               </div>
@@ -483,17 +508,7 @@ export function BluechipPoolConfigPanel() {
                   </div>
                 ) : null}
 
-                <div className="mt-2">
-                  <label className="mb-1 block text-xs text-muted-foreground">股票名称（可选）</label>
-                  <Input
-                    value={symbolForm.stockName}
-                    onChange={(event) => setSymbolForm((prev) => ({ ...prev, stockName: event.target.value }))}
-                    placeholder="可编辑，默认随检索结果自动回填"
-                    disabled={!selectedSymbolPool}
-                  />
-                </div>
-
-                <div className="mt-3 max-h-[56vh] overflow-auto rounded-lg border border-border/60">
+                <div className="mt-3 overflow-hidden rounded-lg border border-border/60">
                   <div className="border-b border-border/60 px-3 py-2">
                     <div className="relative">
                       <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
@@ -505,78 +520,112 @@ export function BluechipPoolConfigPanel() {
                       />
                     </div>
                   </div>
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-muted/70 text-xs text-muted-foreground">
-                      <tr>
-                        <th className="px-3 py-2 text-left">代码</th>
-                        <th className="px-3 py-2 text-left">名称</th>
-                        <th className="px-3 py-2 text-left">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {!selectedSymbolPool || !Array.isArray(selectedSymbolPool.symbols) || selectedSymbolPool.symbols.length === 0 ? (
+                  <div className="overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/70 text-xs text-muted-foreground">
                         <tr>
-                          <td className="px-3 py-4 text-center text-muted-foreground" colSpan={3}>暂无代码</td>
+                          <th className="px-3 py-2 text-left">代码</th>
+                          <th className="px-3 py-2 text-left">名称</th>
+                          <th className="px-3 py-2 text-left">操作</th>
                         </tr>
-                      ) : null}
-                      {selectedSymbolPool && filteredSymbols.length === 0 && selectedSymbolPool.symbols?.length > 0 ? (
-                        <tr>
-                          <td className="px-3 py-4 text-center text-muted-foreground" colSpan={3}>没有匹配的标的</td>
-                        </tr>
-                      ) : null}
-                      {filteredSymbols.map((item) => {
-                        const isEditing = String(editingSymbolId) === String(item.id);
-                        return (
-                          <tr key={item.id} className="border-t border-border/50">
-                            <td className="px-3 py-2">
-                              {isEditing ? (
-                                <Input
-                                  value={editingSymbolForm.stockCode}
-                                  onChange={(event) => setEditingSymbolForm((prev) => ({ ...prev, stockCode: event.target.value.toUpperCase() }))}
-                                />
-                              ) : item.stockCode}
-                            </td>
-                            <td className="px-3 py-2">
-                              {isEditing ? (
-                                <Input
-                                  value={editingSymbolForm.stockName}
-                                  onChange={(event) => setEditingSymbolForm((prev) => ({ ...prev, stockName: event.target.value }))}
-                                />
-                              ) : (item.stockName || '--')}
-                            </td>
-                            <td className="px-3 py-2">
-                              <div className="flex flex-wrap gap-2">
-                                {isEditing ? (
-                                  <>
-                                    <Button type="button" size="sm" onClick={handleUpdateSymbol} disabled={saving}>保存</Button>
-                                    <Button type="button" size="sm" variant="outline" onClick={() => setEditingSymbolId('')} disabled={saving}>取消</Button>
-                                  </>
-                                ) : (
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => {
-                                      setEditingSymbolId(String(item.id));
-                                      setEditingSymbolForm({
-                                        stockCode: item.stockCode || '',
-                                        stockName: item.stockName || '',
-                                      });
-                                    }}
-                                  >
-                                    编辑
-                                  </Button>
-                                )}
-                                <Button type="button" size="sm" variant="outline" onClick={() => handleDeleteSymbol(item.id)} disabled={saving}>
-                                  删除
-                                </Button>
-                              </div>
-                            </td>
+                      </thead>
+                      <tbody>
+                        {!selectedSymbolPool || !Array.isArray(selectedSymbolPool.symbols) || selectedSymbolPool.symbols.length === 0 ? (
+                          <tr>
+                            <td className="px-3 py-4 text-center text-muted-foreground" colSpan={3}>暂无代码</td>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                        ) : null}
+                        {selectedSymbolPool && filteredSymbols.length === 0 && selectedSymbolPool.symbols?.length > 0 ? (
+                          <tr>
+                            <td className="px-3 py-4 text-center text-muted-foreground" colSpan={3}>没有匹配的标的</td>
+                          </tr>
+                        ) : null}
+                        {pagedSymbols.map((item) => {
+                          const isEditing = String(editingSymbolId) === String(item.id);
+                          return (
+                            <tr key={item.id} className="border-t border-border/50">
+                              <td className="px-3 py-2">
+                                {isEditing ? (
+                                  <Input
+                                    value={editingSymbolForm.stockCode}
+                                    onChange={(event) => setEditingSymbolForm((prev) => ({ ...prev, stockCode: event.target.value.toUpperCase() }))}
+                                  />
+                                ) : item.stockCode}
+                              </td>
+                              <td className="px-3 py-2">
+                                {isEditing ? (
+                                  <Input
+                                    value={editingSymbolForm.stockName}
+                                    onChange={(event) => setEditingSymbolForm((prev) => ({ ...prev, stockName: event.target.value }))}
+                                  />
+                                ) : (item.stockName || '--')}
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="flex flex-wrap gap-2">
+                                  {isEditing ? (
+                                    <>
+                                      <Button type="button" size="sm" onClick={handleUpdateSymbol} disabled={saving}>保存</Button>
+                                      <Button type="button" size="sm" variant="outline" onClick={() => setEditingSymbolId('')} disabled={saving}>取消</Button>
+                                    </>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => {
+                                        setEditingSymbolId(String(item.id));
+                                        setEditingSymbolForm({
+                                          stockCode: item.stockCode || '',
+                                          stockName: item.stockName || '',
+                                        });
+                                      }}
+                                    >
+                                      编辑
+                                    </Button>
+                                  )}
+                                  <Button type="button" size="sm" variant="outline" onClick={() => handleDeleteSymbol(item.id)} disabled={saving}>
+                                    删除
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {selectedSymbolPool && filteredSymbols.length > 0 ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                      <div>
+                        第 {symbolPage} / {symbolTotalPages} 页，共 {filteredSymbols.length} 条
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Select value={String(symbolPageSize)} onValueChange={(value) => setSymbolPageSize(Number(value) || 20)}>
+                          <SelectTrigger className="h-8 w-[110px]">
+                            <SelectValue placeholder="每页条数" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="10">每页 10</SelectItem>
+                            <SelectItem value="20">每页 20</SelectItem>
+                            <SelectItem value="50">每页 50</SelectItem>
+                            <SelectItem value="100">每页 100</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Button type="button" size="sm" variant="outline" disabled={symbolPage <= 1} onClick={() => setSymbolPage((prev) => Math.max(1, prev - 1))}>
+                          上一页
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={symbolPage >= symbolTotalPages}
+                          onClick={() => setSymbolPage((prev) => Math.min(symbolTotalPages, prev + 1))}
+                        >
+                          下一页
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
