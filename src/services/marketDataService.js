@@ -183,6 +183,8 @@ function parseDateTimeMs(value) {
 function calcSyncJobProgress(details = []) {
   const totalItems = details.length;
   const successItems = details.filter((entry) => entry.status === 'success').length;
+  const successWrittenItems = details.filter((entry) => entry.status === 'success' && Number(entry?.barsWritten || 0) > 0).length;
+  const successNoWriteItems = Math.max(successItems - successWrittenItems, 0);
   const failedItems = details.filter((entry) => entry.status === 'failed').length;
   const runningItems = details.filter((entry) => entry.status === 'running').length;
   const queuedItems = details.filter((entry) => entry.status === 'queued').length;
@@ -193,11 +195,25 @@ function calcSyncJobProgress(details = []) {
   return {
     totalItems,
     successItems,
+    successWrittenItems,
+    successNoWriteItems,
     failedItems,
     runningItems,
     queuedItems,
     doneItems,
     progressPct,
+  };
+}
+
+function summarizeSyncOutcome(success = [], failed = []) {
+  const successWithWriteSymbols = (Array.isArray(success) ? success : [])
+    .filter((item) => Number(item?.writtenBars || 0) > 0)
+    .length;
+  const successNoWriteSymbols = Math.max((Array.isArray(success) ? success.length : 0) - successWithWriteSymbols, 0);
+  return {
+    successWithWriteSymbols,
+    successNoWriteSymbols,
+    failedSymbols: Array.isArray(failed) ? failed.length : 0,
   };
 }
 
@@ -1038,6 +1054,119 @@ export const marketDataService = {
     try {
       if (symbolType === 'stock') {
         const symbols = resolveStockSymbolsForSync(payload.stockCode || payload.quoteCode);
+        const canUseBatchDaily = timeframe === '1d' && startDay === endDay;
+
+        if (canUseBatchDaily) {
+          const itemMap = new Map();
+          symbols.forEach((symbol) => {
+            const item = marketSyncJobRepository.createJobItem({
+              jobId: job.id,
+              symbolCode: symbol.stockCode,
+              quoteCode: symbol.stockCode,
+              symbolType,
+              market: 'A',
+              timeframe,
+              rangeStart: startDay,
+              rangeEnd: endDay,
+              status: 'running',
+              startedAt: nowLocalDateTime(),
+            });
+            itemMap.set(symbol.stockCode, { itemId: item.id, symbol });
+          });
+
+          const batchResult = await stockDataService.syncDailyBarsByTradeDay({
+            stockCodes: symbols.map((item) => item.stockCode),
+            tradeDay: startDay,
+          });
+
+          symbols.forEach((symbol) => {
+            const row = batchResult?.byStockCode?.[symbol.stockCode] || null;
+            const written = Number(row?.writtenBars || 0);
+            const message = String(row?.error || '').trim();
+            const itemMeta = itemMap.get(symbol.stockCode);
+
+            if (written > 0) {
+              writtenBars += written;
+              if (!firstSyncedDay || startDay < firstSyncedDay) firstSyncedDay = startDay;
+              if (!lastSyncedDay || startDay > lastSyncedDay) lastSyncedDay = startDay;
+              success.push({
+                stockCode: symbol.stockCode,
+                symbolName: symbol.name || '',
+                fetchedCandles: written,
+                writtenBars: written,
+                firstDay: startDay,
+                lastDay: startDay,
+              });
+              marketSyncJobRepository.updateJobItem(itemMeta.itemId, {
+                status: 'success',
+                barsWritten: written,
+                sourceProvider: row?.sourceProvider || 'tushare.daily',
+                finishedAt: nowLocalDateTime(),
+              });
+              return;
+            }
+
+            if (message) {
+              failed.push({
+                stockCode: symbol.stockCode,
+                symbolName: symbol.name || '',
+                message,
+              });
+              marketSyncJobRepository.updateJobItem(itemMeta.itemId, {
+                status: 'failed',
+                errorCode: 'SYNC_STOCK_FAILED',
+                errorMessage: message,
+                finishedAt: nowLocalDateTime(),
+              });
+              return;
+            }
+
+            success.push({
+              stockCode: symbol.stockCode,
+              symbolName: symbol.name || '',
+              fetchedCandles: 0,
+              writtenBars: 0,
+              firstDay: null,
+              lastDay: null,
+            });
+            marketSyncJobRepository.updateJobItem(itemMeta.itemId, {
+              status: 'success',
+              barsWritten: 0,
+              sourceProvider: 'tushare.daily',
+              finishedAt: nowLocalDateTime(),
+            });
+          });
+
+          const result = {
+            ok: failed.length === 0,
+            symbolType,
+            timeframe,
+            syncRange,
+            startDay,
+            endDay,
+            firstSyncedDay,
+            lastSyncedDay,
+            stockCode: String(payload.stockCode || payload.quoteCode || '').trim().toUpperCase(),
+            earliestAllowedDay,
+            maxLookbackDays: rule.maxDays,
+            symbolTotal: symbols.length,
+            successSymbols: success.length,
+            ...summarizeSyncOutcome(success, failed),
+            writtenBars,
+            success,
+            failed,
+            jobId: job.id,
+          };
+
+          marketSyncJobRepository.updateJob(job.id, {
+            status: failed.length ? (success.length ? 'partial_failed' : 'failed') : 'success',
+            finishedAt: nowLocalDateTime(),
+            summaryJson: JSON.stringify(result),
+          });
+
+          return result;
+        }
+
         for (const symbol of symbols) {
           const item = marketSyncJobRepository.createJobItem({
             jobId: job.id,
@@ -1059,6 +1188,8 @@ export const marketDataService = {
                 await stockDataService.getHistory(symbol.stockCode, {
                   days: Math.max(daySpan + 30, 180),
                   localMode: 'coverage_first',
+                  coverageTargetDay: endDay,
+                  coverageRequireOfficial: true,
                 });
                 lastError = null;
                 break;
@@ -1133,7 +1264,7 @@ export const marketDataService = {
           maxLookbackDays: rule.maxDays,
           symbolTotal: symbols.length,
           successSymbols: success.length,
-          failedSymbols: failed.length,
+          ...summarizeSyncOutcome(success, failed),
           writtenBars,
           success,
           failed,
@@ -1238,7 +1369,7 @@ export const marketDataService = {
         maxLookbackDays: rule.maxDays,
         symbolTotal: symbols.length,
         successSymbols: success.length,
-        failedSymbols: failed.length,
+        ...summarizeSyncOutcome(success, failed),
         writtenBars,
         success,
         failed,

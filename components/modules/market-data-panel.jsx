@@ -96,6 +96,45 @@ function formatGap(value) {
   return `${seconds}s`;
 }
 
+function formatCnDateTime(value) {
+  const text = String(value || '').trim();
+  if (!text) return '--';
+
+  const hasZone = /([zZ]|[+-]\d{2}:\d{2})$/.test(text);
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T');
+  // SQLite datetime('now') 产出的时间是 UTC，这里按 UTC 解析后再转 Asia/Shanghai 显示。
+  const candidates = hasZone
+    ? [normalized]
+    : [`${normalized}Z`, normalized];
+
+  let date = null;
+  for (const item of candidates) {
+    const parsed = new Date(item);
+    if (Number.isFinite(parsed.getTime())) {
+      date = parsed;
+      break;
+    }
+  }
+  if (!date) return text;
+
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date);
+
+  const values = parts.reduce((acc, item) => {
+    if (item?.type && item.type !== 'literal') acc[item.type] = item.value;
+    return acc;
+  }, {});
+  return `${values.year || '----'}-${values.month || '--'}-${values.day || '--'} ${values.hour || '--'}:${values.minute || '--'}:${values.second || '--'}`;
+}
+
 function pad2(n) {
   return String(n).padStart(2, '0');
 }
@@ -370,6 +409,9 @@ export function MarketDataPanel() {
       const rangeSummary = plan.rangeMode === 'from_trade_day_to_now'
         ? `同步区间 ${result.startDay} ~ ${result.endDay}`
         : `同步日期 ${result.startDay}`;
+      const successWithWrite = Number(result.successWithWriteSymbols ?? result.successSymbols ?? 0);
+      const successNoWrite = Number(result.successNoWriteSymbols ?? 0);
+      const failedSymbols = Number(result.failedSymbols ?? 0);
       const displaySummary = refreshedFilters.startDay && refreshedFilters.endDay
         ? (refreshedFilters.startDay === refreshedFilters.endDay
           ? `；当前展示交易日 ${refreshedFilters.startDay}`
@@ -377,11 +419,11 @@ export function MarketDataPanel() {
         : '';
 
       setMessage(
-        `同步完成（${rangeSummary}）：成功 ${formatInt(result.successSymbols || 0)} / ${formatInt(result.symbolTotal || 0)}，` +
+        `同步完成（${rangeSummary}）：成功且有写入 ${formatInt(successWithWrite)}，成功但0写入 ${formatInt(successNoWrite)}，失败 ${formatInt(failedSymbols)} / ${formatInt(result.symbolTotal || 0)}，` +
         `写入 ${formatInt(result.writtenBars || 0)} 条` +
         displaySummary +
-        (Number(result.failedSymbols || 0) > 0
-          ? `；失败 ${formatInt(result.failedSymbols || 0)}${failedSummary ? `（${failedSummary}）` : ''}`
+        (failedSymbols > 0
+          ? `；失败明细 ${formatInt(failedSymbols)}${failedSummary ? `（${failedSummary}）` : ''}`
           : ''),
       );
       setSyncConfirmMode(false);
@@ -586,6 +628,7 @@ export function MarketDataPanel() {
                       <th className="px-3 py-2 text-left">间隔</th>
                       <th className="px-3 py-2 text-left">缺口根数</th>
                       <th className="px-3 py-2 text-left">来源</th>
+                      <th className="px-3 py-2 text-left">入库时间</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -602,11 +645,12 @@ export function MarketDataPanel() {
                         <td className="px-3 py-2">{formatGap(item.gapSeconds)}</td>
                         <td className="px-3 py-2">{formatInt(item.gapBars)}</td>
                         <td className="px-3 py-2">{item.source || '--'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{formatCnDateTime(item.syncedAt || item.updatedAt)}</td>
                       </tr>
                     ))}
                     {!payload?.items?.length ? (
                       <tr>
-                        <td colSpan={11} className="px-3 py-8 text-center text-muted-foreground">当前分页暂无数据</td>
+                        <td colSpan={12} className="px-3 py-8 text-center text-muted-foreground">当前分页暂无数据</td>
                       </tr>
                     ) : null}
                   </tbody>
@@ -717,6 +761,9 @@ export function MarketDataPanel() {
                     const pct = Number(job?.progress?.progressPct || 0);
                     const done = Number(job?.progress?.doneItems || 0);
                     const total = Number(job?.progress?.totalItems || 0);
+                    const successWithWrite = Number(job?.progress?.successWrittenItems ?? job?.progress?.successItems ?? 0);
+                    const successNoWrite = Number(job?.progress?.successNoWriteItems ?? 0);
+                    const failedItems = Number(job?.progress?.failedItems || 0);
                     const statusRaw = String(job?.status || '--');
                     const statusText = getSyncJobStatusLabel(statusRaw);
                     const statusClass = statusRaw === 'success'
@@ -740,7 +787,7 @@ export function MarketDataPanel() {
                               <div className="h-full bg-primary" style={{ width: `${Math.min(Math.max(pct, 0), 100)}%` }} />
                             </div>
                             <p className="text-xs text-muted-foreground">
-                              {done}/{total} 完成，成功 {formatInt(job?.progress?.successItems || 0)}，失败 {formatInt(job?.progress?.failedItems || 0)}
+                              {done}/{total} 完成，成功且有写入 {formatInt(successWithWrite)}，成功但0写入 {formatInt(successNoWrite)}，失败 {formatInt(failedItems)}
                             </p>
                           </div>
                         </td>

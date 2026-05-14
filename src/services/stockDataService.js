@@ -12,6 +12,11 @@ const execFileAsync = promisify(execFile);
 let localDailyBarsInitialized = false;
 let lastTushareDailyRequestAt = 0;
 
+function isTushareRateLimitMessage(message = '') {
+  const text = String(message || '');
+  return text.includes('code=40203') || text.includes('频率超限');
+}
+
 function sleepMs(ms = 0) {
   const timeout = Math.max(0, Number(ms) || 0);
   return new Promise((resolve) => setTimeout(resolve, timeout));
@@ -276,6 +281,22 @@ function normalizeTushareTradeDay(input = '') {
   return '';
 }
 
+function toLocalStockCodeFromTsCode(tsCode = '') {
+  const text = String(tsCode || '').trim().toUpperCase();
+  const matched = text.match(/^(\d{6})\.(SH|SZ)$/);
+  if (matched) return matched[1];
+  return '';
+}
+
+function splitIntoChunks(items = [], chunkSize = 200) {
+  const size = Math.max(1, Number(chunkSize) || 200);
+  const chunks = [];
+  for (let idx = 0; idx < items.length; idx += size) {
+    chunks.push(items.slice(idx, idx + size));
+  }
+  return chunks;
+}
+
 function ensureLocalDailyBarsTable() {
   if (localDailyBarsInitialized) return;
   const db = getDb();
@@ -319,7 +340,7 @@ function readLocalDailyBars(stockCode = '', limit = 240) {
     const normalized = normalizeStockCode(stockCode);
     const normalizedLimit = Math.max(1, Number(limit) || 240);
     let rows = db.prepare(`
-      SELECT trade_day, open, high, low, close, vol
+      SELECT trade_day, open, high, low, close, vol, source
       FROM stock_eod_bars
       WHERE stock_code = ?
         AND timeframe = '1d'
@@ -329,7 +350,7 @@ function readLocalDailyBars(stockCode = '', limit = 240) {
 
     if (!rows.length) {
       rows = db.prepare(`
-        SELECT trade_date AS trade_day, open, high, low, close, vol
+        SELECT trade_date AS trade_day, open, high, low, close, vol, 'stock_daily_bars.legacy' AS source
         FROM stock_daily_bars
         WHERE stock_code = ?
         ORDER BY trade_date DESC
@@ -348,6 +369,7 @@ function readLocalDailyBars(stockCode = '', limit = 240) {
         low: Number(item.low || 0),
         close: Number(item.close || 0),
         volume: Number(item.vol || 0),
+        source: String(item.source || '').trim(),
       }))
       .filter((item) => Number.isFinite(item.close) && item.close > 0 && item.date);
   } catch {
@@ -1531,6 +1553,8 @@ export const stockDataService = {
     interval = '1d',
     localMode = 'auto',
     includeTodayRealtime = false,
+    coverageTargetDay = '',
+    coverageRequireOfficial = false,
   } = {}) {
     const normalized = normalizeStockCode(stockCode);
     const symbol = toYahooSymbol(normalized);
@@ -1548,7 +1572,27 @@ export const stockDataService = {
         const localRows = readLocalDailyBars(normalized, preferredLimit);
         const latestLocalDate = localRows[localRows.length - 1]?.date || '';
         const looksFresh = latestLocalDate && daysFromToday(latestLocalDate) <= 10;
-        if (localRows.length >= requiredRows || (!enforceCoverage && looksFresh && localRows.length >= 10)) {
+        const normalizedCoverageTargetDay = normalizeTradeDay(coverageTargetDay);
+        const targetRow = normalizedCoverageTargetDay
+          ? localRows.find((item) => String(item?.date || '').slice(0, 10) === normalizedCoverageTargetDay)
+          : null;
+        const targetSource = String(targetRow?.source || '').trim().toLowerCase();
+        const targetIsSynthetic = targetSource.startsWith('realtime.synthetic.1d');
+        const targetCoveredByLocal = !normalizedCoverageTargetDay
+          ? false
+          : Boolean(
+            targetRow
+            && (
+              !coverageRequireOfficial
+              || !targetIsSynthetic
+            ),
+          );
+
+        const shouldUseLocal = normalizedCoverageTargetDay
+          ? targetCoveredByLocal
+          : (localRows.length >= requiredRows || (!enforceCoverage && looksFresh && localRows.length >= 10));
+
+        if (shouldUseLocal) {
           payload = {
             meta: {
               shortName: normalized,
@@ -1701,6 +1745,152 @@ export const stockDataService = {
     return {
       quote,
       history: rows,
+    };
+  },
+
+  async syncDailyBarsByTradeDay({
+    stockCodes = [],
+    tradeDay = '',
+    chunkSize = 450,
+  } = {}) {
+    const normalizedTradeDay = normalizeTradeDay(tradeDay);
+    if (!normalizedTradeDay) {
+      throw new HttpError(400, 'tradeDay 无效，格式应为 YYYY-MM-DD');
+    }
+
+    const compactTradeDay = normalizedTradeDay.replace(/-/g, '');
+    const dedup = new Map();
+    (Array.isArray(stockCodes) ? stockCodes : []).forEach((item) => {
+      const localCode = normalizeStockCode(item).replace(/^(SH|SZ)/, '');
+      if (!/^\d{6}$/.test(localCode)) return;
+      const tsCode = toTushareLikeTsCode(localCode);
+      if (!/^\d{6}\.(SH|SZ)$/.test(tsCode)) return;
+      dedup.set(localCode, tsCode);
+    });
+    const targets = Array.from(dedup.entries()).map(([stockCode, tsCode]) => ({ stockCode, tsCode }));
+    if (!targets.length) {
+      return {
+        tradeDay: normalizedTradeDay,
+        totalSymbols: 0,
+        requestedChunks: 0,
+        fetchedRows: 0,
+        writtenBars: 0,
+        byStockCode: {},
+      };
+    }
+
+    const effectiveChunkSize = Math.min(Math.max(Number(chunkSize) || 450, 20), 1200);
+    const targetSet = new Set(targets.map((item) => item.stockCode));
+    const chunks = splitIntoChunks(targets, effectiveChunkSize);
+    const byStockCode = {};
+    targets.forEach((item) => {
+      byStockCode[item.stockCode] = {
+        stockCode: item.stockCode,
+        writtenBars: 0,
+        sourceProvider: null,
+        error: null,
+      };
+    });
+
+    let fetchedRows = 0;
+    let writtenBars = 0;
+    for (const chunk of chunks) {
+      const tsCodes = chunk.map((item) => item.tsCode).join(',');
+      try {
+        let data = null;
+        let lastError = null;
+        for (let attempt = 0; attempt <= 3; attempt += 1) {
+          try {
+            data = await requestTushareApi(
+              'daily',
+              { ts_code: tsCodes, trade_date: compactTradeDay },
+              'ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount',
+              12000,
+            );
+            lastError = null;
+            break;
+          } catch (error) {
+            lastError = error;
+            if (!isTushareRateLimitMessage(error?.message) || attempt >= 3) {
+              throw error;
+            }
+            await sleepMs((attempt + 1) * 1200);
+          }
+        }
+        if (lastError) throw lastError;
+
+        const fields = Array.isArray(data?.fields) ? data.fields : [];
+        const items = Array.isArray(data?.items) ? data.items : [];
+        fetchedRows += items.length;
+        const idx = new Map(fields.map((field, i) => [String(field || '').trim(), i]));
+        const grouped = new Map();
+
+        items.forEach((item) => {
+          const localCode = toLocalStockCodeFromTsCode(item[idx.get('ts_code')]);
+          if (!localCode || !targetSet.has(localCode)) return;
+          const day = normalizeTushareTradeDay(item[idx.get('trade_date')]);
+          if (day !== normalizedTradeDay) return;
+          const close = Number(item[idx.get('close')] || 0);
+          if (!Number.isFinite(close) || close <= 0) return;
+
+          const open = Number(item[idx.get('open')] || close);
+          const high = Number(item[idx.get('high')] || close);
+          const low = Number(item[idx.get('low')] || close);
+          const volume = Number(item[idx.get('vol')] || 0);
+          const amount = Number(item[idx.get('amount')] || 0);
+          const preClose = Number(item[idx.get('pre_close')] || 0);
+          const change = Number(item[idx.get('change')] || 0);
+          const pctChg = Number(item[idx.get('pct_chg')] || 0);
+
+          const row = {
+            ts: Math.floor(new Date(`${day}T15:00:00+08:00`).getTime() / 1000),
+            date: day,
+            open: Number.isFinite(open) ? open : close,
+            high: Number.isFinite(high) ? high : close,
+            low: Number.isFinite(low) ? low : close,
+            close,
+            volume: Number.isFinite(volume) ? volume : 0,
+            amount: Number.isFinite(amount) ? amount : 0,
+            preClose: Number.isFinite(preClose) ? preClose : null,
+            change: Number.isFinite(change) ? change : null,
+            pctChg: Number.isFinite(pctChg) ? pctChg : null,
+          };
+          const list = grouped.get(localCode) || [];
+          list.push(row);
+          grouped.set(localCode, list);
+        });
+
+        grouped.forEach((rows, stockCode) => {
+          if (!rows.length) return;
+          upsertLocalDailyBars(stockCode, rows, 'tushare.daily');
+          writtenBars += rows.length;
+          byStockCode[stockCode] = {
+            stockCode,
+            writtenBars: rows.length,
+            sourceProvider: 'tushare.daily',
+            error: null,
+          };
+        });
+      } catch (error) {
+        const message = String(error?.message || '未知错误');
+        chunk.forEach((item) => {
+          byStockCode[item.stockCode] = {
+            stockCode: item.stockCode,
+            writtenBars: 0,
+            sourceProvider: null,
+            error: message,
+          };
+        });
+      }
+    }
+
+    return {
+      tradeDay: normalizedTradeDay,
+      totalSymbols: targets.length,
+      requestedChunks: chunks.length,
+      fetchedRows,
+      writtenBars,
+      byStockCode,
     };
   },
 
