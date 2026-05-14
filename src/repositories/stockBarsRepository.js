@@ -508,7 +508,7 @@ export const stockBarsRepository = {
     const tf = String(timeframe || '').trim();
     if (!tf) return [];
 
-    const normalizedLimit = Math.min(Math.max(Number(limit) || 200, 20), 1000);
+    const normalizedLimit = Math.min(Math.max(Number(limit) || 200, 20), 50000);
     const where = ['timeframe = @timeframe'];
     const params = {
       timeframe: tf,
