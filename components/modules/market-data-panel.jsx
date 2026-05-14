@@ -168,7 +168,7 @@ function clampDateText(value, minDay, maxDay) {
 }
 
 const DEFAULT_END_DAY = formatDateInput(new Date());
-const DEFAULT_START_DAY = shiftDay(DEFAULT_END_DAY, -120);
+const DEFAULT_START_DAY = shiftDay(DEFAULT_END_DAY, -2);
 
 export function MarketDataPanel() {
   const [activeTab, setActiveTab] = useState('audit');

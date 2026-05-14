@@ -292,6 +292,19 @@
 - `POST /system/test-email`
 - `GET /system/schema`
 
+### 行情数据接口
+
+- `GET /system/market-data/query`
+  - 默认查询范围当前页面会使用“最近三天（含今天）”作为初始值。
+  - 股票 `1d` 查询在需要展示今天时，可能返回 `realtime.synthetic.1d:*` 的临时今日日K。
+  - 若当前处于非交易时段，系统会避免把上一交易日快照误当作今天 K 线。
+- `GET /system/market-data`
+  - 仅当未显式传 `symbolType` 时，才按期货盘中查询分支处理。
+  - 传入 `symbolType=stock` 时，行为与 `/system/market-data/query` 一致。
+- `POST /system/market-data/sync`
+  - 手动同步入口，股票日线主路径为正式日线同步。
+  - 不承担“实时合成今日日K”的写库职责，今日日K 由查询层按需补齐。
+
 ## 12. 用量
 
 - `GET /usage/summary?period=7d`

@@ -229,6 +229,29 @@ function isWeekendNow() {
   return day === 0 || day === 6;
 }
 
+function parseTradeDayFromDateTimeText(value = '') {
+  const text = String(value || '').trim();
+  const matched = text.match(/^(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}:\d{2}/);
+  if (!matched) return '';
+  return normalizeTradeDay(matched[1]);
+}
+
+function isCnAshareRealtimeSynthesisWindowNow() {
+  if (isWeekendNow()) return false;
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const morning = minutes >= (9 * 60 + 25) && minutes <= (11 * 60 + 30);
+  const afternoon = minutes >= (13 * 60) && minutes <= (15 * 60 + 30);
+  return morning || afternoon;
+}
+
+function isRealtimeQuoteFreshForToday(quote = {}) {
+  const tradeTime = String(quote?.tradeTime || '').trim();
+  const tradeDay = parseTradeDayFromDateTimeText(tradeTime);
+  if (!tradeDay) return true;
+  return tradeDay === todayTradeDayText();
+}
+
 function isTodayTradeDayMissing(rows = []) {
   if (!Array.isArray(rows) || !rows.length) return true;
   const today = todayTradeDayText();
@@ -451,6 +474,23 @@ function upsertLocalDailyBars(stockCode = '', rows = [], source = 'external') {
       });
     });
     tx(rows);
+  } catch {}
+}
+
+function removeLocalDailyBar(stockCode = '', tradeDay = '') {
+  const normalizedStockCode = normalizeStockCode(stockCode);
+  const normalizedTradeDay = normalizeTradeDay(tradeDay);
+  if (!normalizedStockCode || !normalizedTradeDay) return;
+  try {
+    ensureLocalDailyBarsTable();
+    const db = getDb();
+    db.prepare(`
+      DELETE FROM stock_eod_bars
+      WHERE stock_code = ?
+        AND timeframe = '1d'
+        AND trade_day = ?
+        AND source LIKE 'realtime.synthetic.1d%'
+    `).run(normalizedStockCode, normalizedTradeDay);
   } catch {}
 }
 
@@ -734,7 +774,7 @@ async function requestMootdxRealtimeQuote(stockCode) {
     ma5: null,
     ma10: null,
     ma20: null,
-    tradeTime: hhmmss ? `${todayTradeDayText()} ${hhmmss}` : null,
+    tradeTime: hhmmss || null,
     dataSource: 'mootdx.quotes',
     fetchedAt: nowLocalDateTime(),
   };
@@ -808,16 +848,49 @@ async function ensureTodayRealtimeDailyBar({
 } = {}) {
   const list = Array.isArray(rows) ? rows.slice() : [];
   if (!enabled) return { rows: list, appended: false, source: null, warning: null };
+
+  const today = todayTradeDayText();
+  const hasTodayOfficial = list.some((item) => {
+    const day = String(item?.date || '').slice(0, 10);
+    const source = String(item?.source || '').trim().toLowerCase();
+    return day === today && source && !source.startsWith('realtime.synthetic.1d');
+  });
+  const hasTodaySynthetic = list.some((item) => {
+    const day = String(item?.date || '').slice(0, 10);
+    const source = String(item?.source || '').trim().toLowerCase();
+    return day === today && source.startsWith('realtime.synthetic.1d');
+  });
+
+  if (hasTodaySynthetic && !hasTodayOfficial && !isCnAshareRealtimeSynthesisWindowNow()) {
+    const cleaned = list.filter((item) => {
+      const day = String(item?.date || '').slice(0, 10);
+      const source = String(item?.source || '').trim().toLowerCase();
+      return !(day === today && source.startsWith('realtime.synthetic.1d'));
+    });
+    removeLocalDailyBar(stockCode, today);
+    return {
+      rows: cleaned,
+      appended: false,
+      source: null,
+      warning: '当前非A股交易时段，已清理当日实时合成K线，避免沿用上一交易日快照',
+    };
+  }
+
   if (isWeekendNow()) return { rows: list, appended: false, source: null, warning: '周末跳过实时日线补齐' };
+  if (!isCnAshareRealtimeSynthesisWindowNow()) {
+    return { rows: list, appended: false, source: null, warning: '当前非A股交易时段，跳过实时日线补齐' };
+  }
   if (!isTodayTradeDayMissing(list)) return { rows: list, appended: false, source: null, warning: null };
 
   const quote = await requestRealtimeQuoteForDailySynthesis(stockCode);
+  if (!isRealtimeQuoteFreshForToday(quote)) {
+    throw new HttpError(502, '实时行情时间戳非当日，跳过实时日线补齐');
+  }
   const todayBar = buildRealtimeDailyBarFromQuote(quote, list[list.length - 1] || null);
   if (!todayBar) {
     throw new HttpError(502, '实时行情可用，但无法生成当日日线');
   }
 
-  const today = todayTradeDayText();
   const output = list.filter((item) => String(item?.date || '').slice(0, 10) !== today);
   output.push(todayBar);
   output.sort((a, b) => String(a?.date || '').localeCompare(String(b?.date || '')));
