@@ -8,6 +8,7 @@ import { marketSyncJobRepository } from '../repositories/marketSyncJobRepository
 import { marketQualityRepository } from '../repositories/marketQualityRepository.js';
 import { stockDataService } from './stockDataService.js';
 import { HttpError } from '../utils/httpError.js';
+import { nowLocalDateTime } from '../utils/date.js';
 
 const FUTURES_HISTORY_UT = 'fa5fd1943c7b386f172d6893dbfba10b';
 const execFileAsync = promisify(execFile);
@@ -27,6 +28,7 @@ const INTRADAY_TIMEFRAME_SECONDS = {
   '1M': 30 * 86400,
 };
 const STOCK_DAILY_SYNC_MAX_RETRIES = 3;
+const SYNC_JOB_STALE_MINUTES = 30;
 
 const SYNCABLE_RULES_BY_SYMBOL_TYPE = {
   futures: {
@@ -157,6 +159,70 @@ function sleep(ms = 0) {
 function isTushareRateLimitError(error) {
   const message = String(error?.message || '');
   return message.includes('code=40203') || message.includes('频率超限');
+}
+
+function parseDateTimeMs(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+
+  if (/^\d{10,13}$/.test(text)) {
+    const num = Number(text);
+    if (!Number.isFinite(num)) return null;
+    return text.length === 10 ? num * 1000 : num;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) {
+    const parsed = new Date(text.replace(' ', 'T')).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  const parsed = new Date(text).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function calcSyncJobProgress(details = []) {
+  const totalItems = details.length;
+  const successItems = details.filter((entry) => entry.status === 'success').length;
+  const failedItems = details.filter((entry) => entry.status === 'failed').length;
+  const runningItems = details.filter((entry) => entry.status === 'running').length;
+  const queuedItems = details.filter((entry) => entry.status === 'queued').length;
+  const doneItems = successItems + failedItems;
+  const progressPct = totalItems > 0
+    ? Number(((doneItems / totalItems) * 100).toFixed(2))
+    : 0;
+  return {
+    totalItems,
+    successItems,
+    failedItems,
+    runningItems,
+    queuedItems,
+    doneItems,
+    progressPct,
+  };
+}
+
+function resolveTerminalStatusByProgress(progress = {}) {
+  if (Number(progress.failedItems || 0) > 0) {
+    return Number(progress.successItems || 0) > 0 ? 'partial_failed' : 'failed';
+  }
+  return 'success';
+}
+
+function calcSyncJobLastActivityMs(job = {}, details = []) {
+  const points = [
+    job.createdAt,
+    job.updatedAt,
+    job.startedAt,
+    job.finishedAt,
+    ...details.flatMap((item) => [item.createdAt, item.updatedAt, item.startedAt, item.finishedAt]),
+  ];
+  let latest = null;
+  points.forEach((value) => {
+    const ms = parseDateTimeMs(value);
+    if (!Number.isFinite(ms)) return;
+    if (!Number.isFinite(latest) || ms > latest) latest = ms;
+  });
+  return latest;
 }
 
 function dateToCompact(dayText) {
@@ -959,7 +1025,7 @@ export const marketDataService = {
       startDate: startDay,
       endDate: endDay,
       status: 'running',
-      startedAt: new Date().toISOString(),
+      startedAt: nowLocalDateTime(),
       paramsJson: JSON.stringify(payload || {}),
     });
 
@@ -983,7 +1049,7 @@ export const marketDataService = {
             rangeStart: startDay,
             rangeEnd: endDay,
             status: 'running',
-            startedAt: new Date().toISOString(),
+            startedAt: nowLocalDateTime(),
           });
 
           try {
@@ -1035,7 +1101,7 @@ export const marketDataService = {
               status: 'success',
               barsWritten: written,
               sourceProvider: 'stockDataService.getHistory',
-              finishedAt: new Date().toISOString(),
+              finishedAt: nowLocalDateTime(),
             });
           } catch (error) {
             const message = String(error?.message || '未知错误');
@@ -1048,7 +1114,7 @@ export const marketDataService = {
               status: 'failed',
               errorCode: 'SYNC_STOCK_FAILED',
               errorMessage: message,
-              finishedAt: new Date().toISOString(),
+              finishedAt: nowLocalDateTime(),
             });
           }
         }
@@ -1076,7 +1142,7 @@ export const marketDataService = {
 
         marketSyncJobRepository.updateJob(job.id, {
           status: failed.length ? (success.length ? 'partial_failed' : 'failed') : 'success',
-          finishedAt: new Date().toISOString(),
+          finishedAt: nowLocalDateTime(),
           summaryJson: JSON.stringify(result),
         });
 
@@ -1096,7 +1162,7 @@ export const marketDataService = {
           rangeStart: startDay,
           rangeEnd: endDay,
           status: 'running',
-          startedAt: new Date().toISOString(),
+          startedAt: nowLocalDateTime(),
         });
 
         try {
@@ -1140,7 +1206,7 @@ export const marketDataService = {
             status: 'success',
             barsWritten: written,
             sourceProvider: 'eastmoney.push2his',
-            finishedAt: new Date().toISOString(),
+            finishedAt: nowLocalDateTime(),
           });
         } catch (error) {
           const message = String(error?.message || '未知错误');
@@ -1153,7 +1219,7 @@ export const marketDataService = {
             status: 'failed',
             errorCode: 'SYNC_FUTURES_FAILED',
             errorMessage: message,
-            finishedAt: new Date().toISOString(),
+            finishedAt: nowLocalDateTime(),
           });
         }
       }
@@ -1181,7 +1247,7 @@ export const marketDataService = {
 
       marketSyncJobRepository.updateJob(job.id, {
         status: failed.length ? (success.length ? 'partial_failed' : 'failed') : 'success',
-        finishedAt: new Date().toISOString(),
+        finishedAt: nowLocalDateTime(),
         summaryJson: JSON.stringify(result),
       });
 
@@ -1189,7 +1255,7 @@ export const marketDataService = {
     } catch (error) {
       marketSyncJobRepository.updateJob(job.id, {
         status: 'failed',
-        finishedAt: new Date().toISOString(),
+        finishedAt: nowLocalDateTime(),
         summaryJson: JSON.stringify({ error: String(error?.message || error) }),
       });
       throw error;
@@ -1204,35 +1270,75 @@ export const marketDataService = {
       jobType: payload.jobType,
     });
 
+    const nowMs = Date.now();
+
     return {
       ...result,
-      items: result.items.map((item) => ({
-        ...item,
-        ...(() => {
-          const details = marketSyncJobRepository.listJobItems(item.id);
-          const totalItems = details.length;
-          const successItems = details.filter((entry) => entry.status === 'success').length;
-          const failedItems = details.filter((entry) => entry.status === 'failed').length;
-          const runningItems = details.filter((entry) => entry.status === 'running').length;
-          const queuedItems = details.filter((entry) => entry.status === 'queued').length;
-          const doneItems = successItems + failedItems;
-          const progressPct = totalItems > 0
-            ? Number(((doneItems / totalItems) * 100).toFixed(2))
-            : 0;
-          return {
-            details,
-            progress: {
-              totalItems,
-              successItems,
-              failedItems,
-              runningItems,
-              queuedItems,
-              doneItems,
-              progressPct,
-            },
-          };
-        })(),
-      })),
+      items: result.items.map((item) => {
+        let job = { ...item };
+        let details = marketSyncJobRepository.listJobItems(item.id);
+        let progress = calcSyncJobProgress(details);
+        let repaired = false;
+        const statusText = String(job.status || '').trim().toLowerCase();
+        const isActiveStatus = statusText === 'running' || statusText === 'queued';
+
+        if (isActiveStatus) {
+          if (progress.totalItems > 0 && progress.doneItems >= progress.totalItems) {
+            const terminalStatus = resolveTerminalStatusByProgress(progress);
+            job = marketSyncJobRepository.updateJob(job.id, {
+              status: terminalStatus,
+              finishedAt: nowLocalDateTime(),
+            }) || job;
+            repaired = true;
+          } else {
+            const lastActivityMs = calcSyncJobLastActivityMs(job, details);
+            const staleMs = SYNC_JOB_STALE_MINUTES * 60 * 1000;
+            const isStale = Number.isFinite(lastActivityMs) && (nowMs - lastActivityMs >= staleMs);
+            if (isStale) {
+              const stuckItems = details.filter((entry) => {
+                const entryStatus = String(entry.status || '').trim().toLowerCase();
+                return entryStatus === 'running' || entryStatus === 'queued';
+              });
+              const message = `任务疑似异常中断（超过${SYNC_JOB_STALE_MINUTES}分钟无活动），系统自动收口`;
+              stuckItems.forEach((entry) => {
+                marketSyncJobRepository.updateJobItem(entry.id, {
+                  status: 'failed',
+                  errorCode: 'SYNC_JOB_STALE',
+                  errorMessage: message,
+                  finishedAt: nowLocalDateTime(),
+                });
+              });
+
+              details = marketSyncJobRepository.listJobItems(job.id);
+              progress = calcSyncJobProgress(details);
+              const terminalStatus = progress.totalItems > 0
+                ? resolveTerminalStatusByProgress(progress)
+                : 'failed';
+              job = marketSyncJobRepository.updateJob(job.id, {
+                status: terminalStatus,
+                finishedAt: nowLocalDateTime(),
+                summaryJson: JSON.stringify({
+                  staleRecovered: true,
+                  message,
+                  recoveredAt: nowLocalDateTime(),
+                }),
+              }) || job;
+              repaired = true;
+            }
+          }
+        }
+
+        if (repaired) {
+          details = marketSyncJobRepository.listJobItems(job.id);
+          progress = calcSyncJobProgress(details);
+        }
+
+        return {
+          ...job,
+          details,
+          progress,
+        };
+      }),
     };
   },
 

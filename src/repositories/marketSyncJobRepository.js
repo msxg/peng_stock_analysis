@@ -1,4 +1,5 @@
 import { getDb } from '../db/database.js';
+import { nowLocalDateTime } from '../utils/date.js';
 
 function mapJob(row) {
   if (!row) return null;
@@ -50,6 +51,7 @@ function mapJobItem(row) {
 export const marketSyncJobRepository = {
   createJob(payload = {}) {
     const db = getDb();
+    const now = nowLocalDateTime();
     const result = db.prepare(`
       INSERT INTO market_sync_jobs (
         job_type, trigger_type, market_scope, dataset_scope, symbol_type, timeframe,
@@ -58,7 +60,7 @@ export const marketSyncJobRepository = {
       ) VALUES (
         @jobType, @triggerType, @marketScope, @datasetScope, @symbolType, @timeframe,
         @startDate, @endDate, @status, @requestedBy, @paramsJson, @summaryJson,
-        @startedAt, @finishedAt, datetime('now'), datetime('now')
+        @startedAt, @finishedAt, @createdAt, @updatedAt
       )
     `).run({
       jobType: payload.jobType || 'sync',
@@ -75,6 +77,8 @@ export const marketSyncJobRepository = {
       summaryJson: payload.summaryJson || null,
       startedAt: payload.startedAt || null,
       finishedAt: payload.finishedAt || null,
+      createdAt: now,
+      updatedAt: now,
     });
     return this.getJobById(result.lastInsertRowid);
   },
@@ -105,11 +109,12 @@ export const marketSyncJobRepository = {
     });
 
     if (!fields.length) return this.getJobById(id);
+    params.updatedAt = nowLocalDateTime();
 
     db.prepare(`
       UPDATE market_sync_jobs
       SET ${fields.join(', ')},
-          updated_at = datetime('now')
+          updated_at = @updatedAt
       WHERE id = @id
     `).run(params);
 
@@ -118,6 +123,7 @@ export const marketSyncJobRepository = {
 
   createJobItem(payload = {}) {
     const db = getDb();
+    const now = nowLocalDateTime();
     const result = db.prepare(`
       INSERT INTO market_sync_job_items (
         job_id, symbol_code, quote_code, symbol_type, market, timeframe,
@@ -126,7 +132,7 @@ export const marketSyncJobRepository = {
       ) VALUES (
         @jobId, @symbolCode, @quoteCode, @symbolType, @market, @timeframe,
         @rangeStart, @rangeEnd, @sourceProvider, @status, @barsWritten,
-        @errorCode, @errorMessage, @startedAt, @finishedAt, datetime('now'), datetime('now')
+        @errorCode, @errorMessage, @startedAt, @finishedAt, @createdAt, @updatedAt
       )
     `).run({
       jobId: payload.jobId,
@@ -144,6 +150,8 @@ export const marketSyncJobRepository = {
       errorMessage: payload.errorMessage || null,
       startedAt: payload.startedAt || null,
       finishedAt: payload.finishedAt || null,
+      createdAt: now,
+      updatedAt: now,
     });
 
     return this.getJobItemById(result.lastInsertRowid);
@@ -178,11 +186,12 @@ export const marketSyncJobRepository = {
     });
 
     if (!fields.length) return this.getJobItemById(id);
+    params.updatedAt = nowLocalDateTime();
 
     db.prepare(`
       UPDATE market_sync_job_items
       SET ${fields.join(', ')},
-          updated_at = datetime('now')
+          updated_at = @updatedAt
       WHERE id = @id
     `).run(params);
 

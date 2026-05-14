@@ -30,6 +30,13 @@ const SYMBOL_TYPE_OPTIONS = [
   { value: 'futures', label: '期货' },
   { value: 'stock', label: '股票' },
 ];
+
+const JOBS_AUTO_REFRESH_OPTIONS = [
+  { value: 30000, label: '30秒' },
+  { value: 60000, label: '1分钟' },
+  { value: 300000, label: '5分钟' },
+];
+
 const CN_A_SHARE_EARLIEST_DAY = '1990-12-19';
 
 function getTimeframeLabel(key) {
@@ -142,7 +149,8 @@ export function MarketDataPanel() {
   const [jobsLoading, setJobsLoading] = useState(false);
   const [jobsMessage, setJobsMessage] = useState('');
   const [jobsPage, setJobsPage] = useState(1);
-  const [jobsLimit, setJobsLimit] = useState(20);
+  const [jobsLimit, setJobsLimit] = useState(10);
+  const [jobsAutoRefreshMs, setJobsAutoRefreshMs] = useState(30000);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [syncConfirmMode, setSyncConfirmMode] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -194,7 +202,7 @@ export function MarketDataPanel() {
 
   const loadJobs = useCallback(async ({ silent = false, nextPage, nextLimit } = {}) => {
     const pageToQuery = Math.max(Number(nextPage || jobsPage) || 1, 1);
-    const limitToQuery = Math.min(Math.max(Number(nextLimit || jobsLimit) || 20, 10), 200);
+    const limitToQuery = Math.min(Math.max(Number(nextLimit || jobsLimit) || 10, 10), 200);
     if (!silent) {
       setJobsLoading(true);
       setJobsMessage('');
@@ -232,9 +240,9 @@ export function MarketDataPanel() {
 
     const timer = window.setInterval(() => {
       loadJobs({ silent: true, nextPage: jobsPage, nextLimit: jobsLimit }).catch(() => {});
-    }, 3000);
+    }, jobsAutoRefreshMs);
     return () => window.clearInterval(timer);
-  }, [jobsLimit, jobsPage, jobsPayload, loadJobs]);
+  }, [jobsAutoRefreshMs, jobsLimit, jobsPage, jobsPayload, loadJobs]);
 
   const pagination = payload?.pagination || { page: 1, totalPages: 0, total: 0 };
   const canPrev = Number(pagination.page || 1) > 1;
@@ -663,13 +671,34 @@ export function MarketDataPanel() {
               <CardTitle>同步任务</CardTitle>
               <CardDescription>查看历史任务、当前执行进展和失败明细。</CardDescription>
             </div>
-            <Button variant="outline" onClick={() => loadJobs().catch(() => {})} disabled={jobsLoading}>
-              刷新任务
-            </Button>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(jobsAutoRefreshMs)}
+                onValueChange={(value) => {
+                  const nextMs = Number(value) || 30000;
+                  const allowed = JOBS_AUTO_REFRESH_OPTIONS.some((item) => item.value === nextMs);
+                  setJobsAutoRefreshMs(allowed ? nextMs : 30000);
+                }}
+              >
+                <SelectTrigger className="w-[132px]" style={{ width: '132px', minWidth: '132px' }}>
+                  <SelectValue placeholder="自动刷新" />
+                </SelectTrigger>
+                <SelectContent style={{ width: '132px', minWidth: '132px' }}>
+                  {JOBS_AUTO_REFRESH_OPTIONS.map((item) => (
+                    <SelectItem key={item.value} value={String(item.value)}>
+                      自动刷新 {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button variant="outline" onClick={() => loadJobs().catch(() => {})} disabled={jobsLoading}>
+                刷新任务
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
             {jobsMessage ? <p className="text-xs text-muted-foreground">{jobsMessage}</p> : null}
-            <div className="max-h-[360px] overflow-auto rounded-lg border border-border/60">
+            <div className="rounded-lg border border-border/60">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-muted-foreground">
                   <tr>
