@@ -2812,6 +2812,57 @@ function parseMonitorQuoteCodes(input) {
   return Array.from(new Set(tokens));
 }
 
+function hasUsableFuturesIntradayCandles(candles = [], minPoints = 8) {
+  if (!Array.isArray(candles) || !candles.length) return false;
+  const valid = candles.filter((item) => {
+    const close = Number(item?.close);
+    return Number.isFinite(close) && close > 0;
+  }).length;
+  return valid >= Math.max(1, Number(minPoints) || 1);
+}
+
+async function fallbackThirtySecondsCandles(candlesResult, normalized, limit) {
+  if (candlesResult?.ok && hasUsableFuturesIntradayCandles(candlesResult.data?.candles || [], 8)) {
+    return candlesResult;
+  }
+
+  const minuteLimit = Math.max(Number(limit) || 120, 120);
+  const minuteResult = await fetchCandlesWithFallback(normalized, { timeframe: '1m', limit: minuteLimit })
+    .then((data) => ({ ok: true, data }))
+    .catch((error) => ({ ok: false, error }));
+
+  if (!minuteResult.ok) return candlesResult;
+
+  const mergedCandles = mergeAndPersistIntradayCandles({
+    quoteCode: normalized.quoteCode,
+    timeframe: '1m',
+    limit: minuteLimit,
+    candles: minuteResult.data?.candles || [],
+    source: minuteResult.data?.candleDataSource || null,
+  });
+
+  const warningParts = [];
+  if (candlesResult?.ok && candlesResult.data?.warning) warningParts.push(candlesResult.data.warning);
+  if (!candlesResult?.ok && candlesResult?.error?.message) {
+    warningParts.push(`30秒K线接口不可用，已切换1分钟数据: ${candlesResult.error.message}`);
+  }
+  if (candlesResult?.ok && !hasUsableFuturesIntradayCandles(candlesResult.data?.candles || [], 8)) {
+    warningParts.push('30秒K线数据较少，已切换1分钟数据');
+  }
+  if (minuteResult.data?.warning) warningParts.push(minuteResult.data.warning);
+  warningParts.push('30秒K线暂使用1分钟数据近似');
+
+  return {
+    ok: true,
+    data: {
+      candles: mergedCandles.slice(-minuteLimit),
+      candleDataSource: `${minuteResult.data?.candleDataSource || 'unknown'}+alias.30s<-1m`,
+      degraded: true,
+      warning: warningParts.filter(Boolean).join(' | ') || null,
+    },
+  };
+}
+
 // ============ 导出的服务方法 ============
 
 /**
@@ -2922,6 +2973,10 @@ export const futuresService = {
       const warningList = [];
       const errorList = [];
       const quoteErrorText = quoteResult.ok ? '' : `实时行情失败: ${quoteResult.error?.message || '未知错误'}`;
+
+      if (timeframe === '30s') {
+        candlesResult = await fallbackThirtySecondsCandles(candlesResult, normalized, limit);
+      }
 
       if (timeframe === '1m') {
         if (candlesResult.ok) {
@@ -3531,6 +3586,10 @@ export const futuresService = {
       const warningList = [];
       const errorList = [];
       const quoteErrorText = quoteResult.ok ? '' : `实时行情失败: ${quoteResult.error?.message || '未知错误'}`;
+
+      if (timeframe === '30s') {
+        candlesResult = await fallbackThirtySecondsCandles(candlesResult, normalized, limit);
+      }
 
       // 1分钟K线：合并本地缓存数据
       if (timeframe === '1m') {

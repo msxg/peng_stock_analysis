@@ -53,6 +53,67 @@ function mapIntradayBar(row) {
 }
 
 export const stockBarsRepository = {
+  upsertIntradayBars({ stockCode, market = null, tsCode = null, timeframe = '1m', bars = [] } = {}) {
+    const normalizedCode = String(stockCode || '').trim().toUpperCase();
+    const tf = String(timeframe || '').trim();
+    if (!normalizedCode || !tf || !Array.isArray(bars) || !bars.length) return 0;
+
+    const db = getDb();
+    const stmt = db.prepare(`
+      INSERT INTO stock_intraday_bars (
+        stock_code, market, ts_code, timeframe, trade_day, bucket_ts, date, open, high, low, close, pre_close, change, pct_chg, vol, amount, source, synced_at, created_at, updated_at
+      ) VALUES (
+        @stockCode, @market, @tsCode, @timeframe, @tradeDay, @bucketTs, @date, @open, @high, @low, @close, @preClose, @change, @pctChg, @vol, @amount, @source, datetime('now'), datetime('now'), datetime('now')
+      )
+      ON CONFLICT(stock_code, timeframe, bucket_ts) DO UPDATE SET
+        market = excluded.market,
+        ts_code = excluded.ts_code,
+        trade_day = excluded.trade_day,
+        date = excluded.date,
+        open = excluded.open,
+        high = excluded.high,
+        low = excluded.low,
+        close = excluded.close,
+        pre_close = excluded.pre_close,
+        change = excluded.change,
+        pct_chg = excluded.pct_chg,
+        vol = excluded.vol,
+        amount = excluded.amount,
+        source = excluded.source,
+        synced_at = datetime('now'),
+        updated_at = datetime('now')
+    `);
+
+    const tx = db.transaction((items) => {
+      let written = 0;
+      items.forEach((item) => {
+        stmt.run({
+          stockCode: normalizedCode,
+          market: market || null,
+          tsCode: tsCode || null,
+          timeframe: tf,
+          tradeDay: item.tradeDay,
+          bucketTs: item.bucketTs,
+          date: item.date,
+          open: item.open,
+          high: item.high,
+          low: item.low,
+          close: item.close,
+          preClose: item.preClose ?? null,
+          change: item.change ?? null,
+          pctChg: item.pctChg ?? null,
+          vol: item.vol ?? 0,
+          amount: item.amount ?? 0,
+          source: item.source || null,
+        });
+        written += 1;
+      });
+      return written;
+    });
+
+    return tx(bars);
+  },
+
   listEodBars({ stockCode, timeframe = '1d', startDay, endDay, limit = 240 } = {}) {
     const normalizedCode = String(stockCode || '').trim().toUpperCase();
     if (!normalizedCode) return [];

@@ -44,12 +44,12 @@ function buildAverageIndexHistory(shHistory = [], szHistory = []) {
   });
 }
 
-async function resolveIndexRaw(indexCode, { days }) {
+async function resolveIndexRaw(indexCode, { days, includeTodayRealtime = false } = {}) {
   const normalized = String(indexCode || AVERAGE_PRICE_INDEX_CODE).trim().toUpperCase() || AVERAGE_PRICE_INDEX_CODE;
   if (normalized === AVERAGE_PRICE_INDEX_CODE) {
     const [shRaw, szRaw] = await Promise.all([
-      stockDataService.getHistory('SH000001', { days }),
-      stockDataService.getHistory('SZ399001', { days }),
+      stockDataService.getHistory('SH000001', { days, includeTodayRealtime }),
+      stockDataService.getHistory('SZ399001', { days, includeTodayRealtime }),
     ]);
     const averageHistory = buildAverageIndexHistory(shRaw.history || [], szRaw.history || []);
     if (!averageHistory.length) {
@@ -67,7 +67,7 @@ async function resolveIndexRaw(indexCode, { days }) {
     };
   }
 
-  const indexRaw = await stockDataService.getHistory(normalized, { days });
+  const indexRaw = await stockDataService.getHistory(normalized, { days, includeTodayRealtime });
   return {
     code: normalized,
     quote: indexRaw.quote || {},
@@ -121,8 +121,13 @@ export const blueChipModeController = {
     }
 
     const days = parseDays(payload.days ?? payload.params?.days);
-    const stockRaw = await stockDataService.getHistory(stockCode, { days });
-    const indexRaw = await resolveIndexRaw(indexCode, { days });
+    const analysisMode = String(payload.analysisMode || 'today').trim().toLowerCase() === 'history' ? 'history' : 'today';
+    const includeTodayRealtime = analysisMode === 'today';
+    const stockRaw = await stockDataService.getHistory(stockCode, {
+      days,
+      includeTodayRealtime,
+    });
+    const indexRaw = await resolveIndexRaw(indexCode, { days, includeTodayRealtime });
 
     const analysis = blueChipModeService.analyze({
       stockCode,
@@ -165,10 +170,14 @@ export const blueChipModeController = {
     }
     const limitedCodes = picked.codes.slice(0, 500);
 
-    const indexRaw = await resolveIndexRaw(indexCode, { days });
+    const includeTodayRealtime = analysisMode === 'today';
+    const indexRaw = await resolveIndexRaw(indexCode, { days, includeTodayRealtime });
     const tasks = limitedCodes.map((code) => async () => {
       try {
-        const stockRaw = await stockDataService.getHistory(code, { days });
+        const stockRaw = await stockDataService.getHistory(code, {
+          days,
+          includeTodayRealtime,
+        });
         const analysis = blueChipModeService.analyze({
           stockCode: code,
           indexCode: indexRaw.code,

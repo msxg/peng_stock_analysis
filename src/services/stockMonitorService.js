@@ -2,6 +2,7 @@ import { HttpError } from '../utils/httpError.js';
 import { inferMarket, normalizeStockCode, toYahooSymbol } from '../utils/stockCode.js';
 import { stockBasicsRepository } from '../repositories/stockBasicsRepository.js';
 import { stockMonitorRepository } from '../repositories/stockMonitorRepository.js';
+import { stockBarsRepository } from '../repositories/stockBarsRepository.js';
 import { stockDataService } from './stockDataService.js';
 import { futuresService } from './futuresService.js';
 import { marketQueryService } from './marketQueryService.js';
@@ -9,6 +10,7 @@ import { nowLocalDateTime, toLocalDateTime } from '../utils/date.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getOfficialFuturesTradingHours, getOfficialStockTradingHours } from '../utils/tradingHours.js';
+import { env } from '../config/env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -35,6 +37,21 @@ const STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES = {
 const STOCK_MONITOR_DEFAULT_LIMIT_MAP = {
   '1m': 1800,
 };
+const STOCK_MONITOR_INTRADAY_PERSIST_ALLOWED_SOURCES = [
+  'mootdx.bars.1m',
+  'tencent.ifzq.m1',
+  'xtick.kline.minute',
+  'yahoo.chart.1m',
+];
+const STOCK_MONITOR_INTRADAY_PERSIST_THROTTLE_MS = 15 * 1000;
+const STOCK_MONITOR_INTRADAY_PERSIST_MAX_WRITE_BARS = 2400;
+const stockIntradayPersistState = new Map();
+const MOOTDX_INTRADAY_ENABLED = String(env.STOCK_INTRADAY_MOOTDX_ENABLED || 'false').trim().toLowerCase() !== 'false';
+const MOOTDX_PYTHON_BIN = String(env.STOCK_INTRADAY_MOOTDX_PYTHON_BIN || 'python3').trim() || 'python3';
+const MOOTDX_TIMEOUT_MS = Math.max(1500, Number(env.STOCK_INTRADAY_MOOTDX_TIMEOUT_MS || 4500) || 4500);
+const MOOTDX_DISABLE_HINTS = ['no module named', 'modulenotfounderror', 'command not found', 'not found'];
+let mootdxPermanentlyDisabled = false;
+let mootdxDisableReason = '';
 
 function formatDateLocal(ts, withTime = false) {
   const d = new Date(ts * 1000);
@@ -77,6 +94,120 @@ function formatDateTimeFromMs(ms, withTime = true) {
 function toNum(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function toTushareLikeTsCode(stockCode = '') {
+  const normalized = normalizeStockCode(stockCode);
+  const sh = normalized.match(/^SH(\d{6})$/);
+  if (sh) return `${sh[1]}.SH`;
+  const sz = normalized.match(/^SZ(\d{6})$/);
+  if (sz) return `${sz[1]}.SZ`;
+  const core = normalized.match(/^(\d{6})$/);
+  if (core) return core[1].startsWith('6') ? `${core[1]}.SH` : `${core[1]}.SZ`;
+  return normalized;
+}
+
+function normalizeIntradayPersistSource(source = '') {
+  const text = String(source || '').trim();
+  if (!text) return '';
+  const hit = STOCK_MONITOR_INTRADAY_PERSIST_ALLOWED_SOURCES.find((item) => text.startsWith(item));
+  return hit || '';
+}
+
+function shouldThrottleIntradayPersist(stockCode = '', timeframe = '1m') {
+  const key = `${String(stockCode || '').trim().toUpperCase()}::${String(timeframe || '').trim()}`;
+  if (!key) return true;
+  const now = Date.now();
+  const last = Number(stockIntradayPersistState.get(key) || 0);
+  if (now - last < STOCK_MONITOR_INTRADAY_PERSIST_THROTTLE_MS) return true;
+  stockIntradayPersistState.set(key, now);
+  return false;
+}
+
+function buildIntradayBarsForStore(candles = [], source = '') {
+  const list = Array.isArray(candles) ? candles : [];
+  if (!list.length) return [];
+
+  const dedup = new Map();
+  list.forEach((item) => {
+    const ms = parseDateTimeToMs(item?.date);
+    if (!Number.isFinite(ms)) return;
+    const bucketTs = Math.floor(ms / 60000) * 60;
+    const close = toNum(item?.close);
+    if (close == null || close <= 0) return;
+    const open = toNum(item?.open) ?? close;
+    const high = Math.max(toNum(item?.high) ?? Math.max(open, close), open, close);
+    const low = Math.min(toNum(item?.low) ?? Math.min(open, close), open, close);
+    const volume = toNum(item?.volume) ?? 0;
+    const amount = toNum(item?.amount) ?? 0;
+    const date = formatDateTimeFromMs(bucketTs * 1000, true) || String(item?.date || '').trim();
+    const tradeDay = String(date).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(tradeDay)) return;
+    dedup.set(bucketTs, {
+      bucketTs,
+      tradeDay,
+      date,
+      open,
+      high,
+      low,
+      close,
+      vol: volume,
+      amount,
+      source,
+    });
+  });
+
+  const sorted = Array.from(dedup.values()).sort((a, b) => a.bucketTs - b.bucketTs);
+  let prevClose = null;
+  sorted.forEach((item) => {
+    const preClose = Number.isFinite(prevClose) ? prevClose : item.close;
+    const change = item.close - preClose;
+    item.preClose = preClose;
+    item.change = change;
+    item.pctChg = preClose ? (change / preClose) * 100 : 0;
+    prevClose = item.close;
+  });
+  return sorted;
+}
+
+function persistRealtimeIntradayBars({
+  stockCode,
+  timeframe = '1m',
+  candles = [],
+  candleDataSource = '',
+} = {}) {
+  if (String(timeframe || '').trim() !== '1m') return 0;
+  const normalizedCode = normalizeStockCode(stockCode);
+  if (!normalizedCode) return 0;
+
+  const source = normalizeIntradayPersistSource(candleDataSource);
+  if (!source) return 0;
+  if (shouldThrottleIntradayPersist(normalizedCode, timeframe)) return 0;
+
+  const bars = buildIntradayBarsForStore(candles, source);
+  if (!bars.length) return 0;
+
+  const trimmed = bars.slice(-Math.min(STOCK_MONITOR_INTRADAY_PERSIST_MAX_WRITE_BARS, bars.length));
+  const market = inferMarket(normalizedCode);
+  try {
+    return stockBarsRepository.upsertIntradayBars({
+      stockCode: normalizedCode,
+      market,
+      tsCode: toTushareLikeTsCode(normalizedCode),
+      timeframe: '1m',
+      bars: trimmed,
+    });
+  } catch (error) {
+    console.warn('[stock-monitor][intraday-persist-failed]', {
+      at: nowLocalDateTime(),
+      stockCode: normalizedCode,
+      timeframe,
+      source,
+      bars: trimmed.length,
+      error: String(error?.message || 'unknown'),
+    });
+    return 0;
+  }
 }
 
 function toBool(value, fallback = true) {
@@ -167,6 +298,176 @@ function formatTencentMinuteTime(value) {
   const text = String(value || '').trim();
   if (!/^\d{12}$/.test(text)) return null;
   return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)} ${text.slice(8, 10)}:${text.slice(10, 12)}:00`;
+}
+
+function resolveMootdxAshareCode(stockCode = '') {
+  const normalized = normalizeStockCode(stockCode);
+  const prefixed = normalized.match(/^(SH|SZ)(\d{6})$/);
+  if (prefixed) {
+    return {
+      symbol: prefixed[2],
+      market: prefixed[1] === 'SH' ? 1 : 0,
+    };
+  }
+  if (/^\d{6}$/.test(normalized)) {
+    return {
+      symbol: normalized,
+      market: normalized.startsWith('6') ? 1 : 0,
+    };
+  }
+  return null;
+}
+
+function normalizeMootdxDatetime(value = '') {
+  const text = String(value || '').trim().replace('T', ' ');
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text} 00:00:00`;
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/.test(text)) return `${text}:00`;
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(text)) return text;
+  return null;
+}
+
+function shouldDisableMootdxPermanently(message = '') {
+  const text = String(message || '').trim().toLowerCase();
+  return MOOTDX_DISABLE_HINTS.some((hint) => text.includes(hint));
+}
+
+function markMootdxDisabled(reason = '') {
+  if (mootdxPermanentlyDisabled) return;
+  mootdxPermanentlyDisabled = true;
+  mootdxDisableReason = String(reason || '').trim() || 'unknown';
+  console.warn('[stock-monitor][mootdx-disabled]', {
+    at: nowLocalDateTime(),
+    reason: mootdxDisableReason,
+    python: MOOTDX_PYTHON_BIN,
+  });
+}
+
+async function requestMootdxIntraday(stockCode, limit = 120) {
+  if (!MOOTDX_INTRADAY_ENABLED) {
+    throw new HttpError(503, 'mootdx分钟源已关闭');
+  }
+  if (mootdxPermanentlyDisabled) {
+    throw new HttpError(503, `mootdx分钟源不可用: ${mootdxDisableReason || 'disabled'}`);
+  }
+
+  const market = inferMarket(normalizeStockCode(stockCode));
+  if (market !== 'CN_SH' && market !== 'CN_SZ') {
+    throw new HttpError(400, 'mootdx分钟源仅支持A股');
+  }
+
+  const target = resolveMootdxAshareCode(stockCode);
+  if (!target) {
+    throw new HttpError(400, 'mootdx分钟源暂不支持该代码格式');
+  }
+
+  const normalizedLimit = Math.max(Number(limit) || 120, 20);
+  const pyScript = [
+    'import json,sys',
+    'from mootdx.quotes import Quotes',
+    'symbol = sys.argv[1]',
+    'market = int(sys.argv[2])',
+    'offset = max(20, int(sys.argv[3]))',
+    "client = Quotes.factory(market='std')",
+    'feed = None',
+    'errors = []',
+    'calls = [',
+    "  {'symbol': symbol, 'frequency': 7, 'offset': offset, 'market': market},",
+    "  {'symbol': symbol, 'frequency': 7, 'offset': offset},",
+    "  {'symbol': symbol, 'frequency': 8, 'offset': offset, 'market': market},",
+    "  {'symbol': symbol, 'frequency': 8, 'offset': offset},",
+    "  {'symbol': symbol, 'category': 7, 'offset': offset, 'market': market},",
+    "  {'symbol': symbol, 'category': 7, 'offset': offset},",
+    ']',
+    'for kwargs in calls:',
+    '  try:',
+    '    candidate = client.bars(**kwargs)',
+    '    if candidate is not None and len(candidate) > 0:',
+    '      feed = candidate',
+    '      break',
+    '  except Exception as ex:',
+    '    errors.append(str(ex))',
+    'if feed is None:',
+    '  if errors:',
+    '    raise RuntimeError(" ; ".join(errors[-3:]))',
+    '  raise RuntimeError("mootdx bars empty")',
+    'records = feed.to_dict("records") if hasattr(feed, "to_dict") else list(feed)',
+    'out = []',
+    'for row in records:',
+    '  dt = str(row.get("datetime") or row.get("date") or row.get("time") or "").strip()',
+    '  if not dt:',
+    '    continue',
+    '  dt = dt.replace("T", " ")',
+    '  if len(dt) == 10:',
+    '    dt = dt + " 00:00:00"',
+    '  elif len(dt) == 16:',
+    '    dt = dt + ":00"',
+    '  close = float(row.get("close") or 0)',
+    '  if close <= 0:',
+    '    continue',
+    '  open_v = float(row.get("open") or close)',
+    '  high_v = float(row.get("high") or max(open_v, close))',
+    '  low_v = float(row.get("low") or min(open_v, close))',
+    '  vol_v = float(row.get("vol") or row.get("volume") or 0)',
+    '  amount_v = float(row.get("amount") or 0)',
+    '  out.append({"date": dt, "open": open_v, "high": high_v, "low": low_v, "close": close, "volume": vol_v, "amount": amount_v})',
+    'print(json.dumps(out, ensure_ascii=False))',
+  ].join('\n');
+
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      MOOTDX_PYTHON_BIN,
+      ['-c', pyScript, target.symbol, String(target.market), String(normalizedLimit)],
+      {
+        timeout: MOOTDX_TIMEOUT_MS,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
+    const text = String(stdout || '').trim();
+    if (!text) {
+      throw new HttpError(404, `mootdx分钟数据为空${stderr ? `: ${String(stderr).trim()}` : ''}`);
+    }
+    let payload = [];
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new HttpError(502, 'mootdx分钟数据格式异常');
+    }
+
+    const candles = (Array.isArray(payload) ? payload : [])
+      .map((item) => ({
+        date: normalizeMootdxDatetime(item?.date),
+        open: toNum(item?.open),
+        high: toNum(item?.high),
+        low: toNum(item?.low),
+        close: toNum(item?.close),
+        volume: toNum(item?.volume) ?? 0,
+        amount: toNum(item?.amount) ?? 0,
+      }))
+      .filter((item) => item.date && item.close != null && item.close > 0)
+      .map((item) => ({
+        ...item,
+        open: item.open ?? item.close,
+        high: item.high ?? Math.max(item.open ?? item.close, item.close),
+        low: item.low ?? Math.min(item.open ?? item.close, item.close),
+      }));
+
+    if (!candles.length) {
+      throw new HttpError(404, 'mootdx分钟数据为空');
+    }
+    return {
+      candles: candles.slice(-normalizedLimit),
+      candleDataSource: 'mootdx.bars.1m',
+      warning: null,
+    };
+  } catch (error) {
+    const message = String(error?.stderr || error?.message || '');
+    if (shouldDisableMootdxPermanently(message)) {
+      markMootdxDisabled(message);
+    }
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(502, `mootdx分钟数据请求失败: ${message || 'unknown'}`);
+  }
 }
 
 async function requestBufferByCurl(url, { referer = '', timeoutMs = 8000 } = {}) {
@@ -724,25 +1025,29 @@ function buildQuoteFallbackFromCandles(symbol, candles = []) {
 
 async function fetchStockIntraday1mSeries(stockCode, limit = 120) {
   const normalizedLimit = Math.max(Number(limit) || 120, 20);
+  const market = inferMarket(normalizeStockCode(stockCode));
+  if (market === 'CN_SH' || market === 'CN_SZ') {
+    try {
+      return await requestMootdxIntraday(stockCode, normalizedLimit);
+    } catch {}
+
+    try {
+      return await requestTencentIntraday(stockCode, normalizedLimit);
+    } catch {}
+
+    try {
+      const xtick = await stockDataService.getXTickIntraday(stockCode, { limit: normalizedLimit });
+      return {
+        candles: xtick.candles,
+        candleDataSource: xtick.candleDataSource,
+        warning: '分钟数据已切换XTick备用源',
+      };
+    } catch {}
+  }
+
   try {
     return await requestYahooIntraday(stockCode, normalizedLimit);
   } catch (yahooError) {
-    const market = inferMarket(normalizeStockCode(stockCode));
-    if (market === 'CN_SH' || market === 'CN_SZ') {
-      try {
-        return await requestTencentIntraday(stockCode, normalizedLimit);
-      } catch {}
-
-      try {
-        const xtick = await stockDataService.getXTickIntraday(stockCode, { limit: normalizedLimit });
-        return {
-          candles: xtick.candles,
-          candleDataSource: xtick.candleDataSource,
-          warning: '分钟数据已切换XTick备用源',
-        };
-      } catch {}
-    }
-
     const fallback = await stockDataService.getHistory(stockCode, { days: Math.max(normalizedLimit, 120) });
     const candles = (fallback?.history || [])
       .map((item) => ({
@@ -806,11 +1111,24 @@ async function getStockMonitorSeries(stockCode, timeframe = '1m', limit = 120) {
 
   if (Object.prototype.hasOwnProperty.call(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES, tf)) {
     if (tf === '1m') {
-      return fetchStockIntraday1mSeries(stockCode, normalizedLimit);
+      const minuteSeries = await fetchStockIntraday1mSeries(stockCode, normalizedLimit);
+      persistRealtimeIntradayBars({
+        stockCode,
+        timeframe: '1m',
+        candles: minuteSeries.candles || [],
+        candleDataSource: minuteSeries.candleDataSource || '',
+      });
+      return minuteSeries;
     }
 
     if (tf === '30s') {
       const minuteSeries = await fetchStockIntraday1mSeries(stockCode, normalizedLimit);
+      persistRealtimeIntradayBars({
+        stockCode,
+        timeframe: '1m',
+        candles: minuteSeries.candles || [],
+        candleDataSource: minuteSeries.candleDataSource || '',
+      });
       return {
         candles: (minuteSeries.candles || []).slice(-normalizedLimit),
         candleDataSource: `${minuteSeries.candleDataSource || 'unknown'}+alias.30s<-1m`,
@@ -823,6 +1141,12 @@ async function getStockMonitorSeries(stockCode, timeframe = '1m', limit = 120) {
       120,
     );
     const minuteSeries = await fetchStockIntraday1mSeries(stockCode, minuteWindow);
+    persistRealtimeIntradayBars({
+      stockCode,
+      timeframe: '1m',
+      candles: minuteSeries.candles || [],
+      candleDataSource: minuteSeries.candleDataSource || '',
+    });
     const candles = aggregateIntradayByMinutes(
       minuteSeries.candles || [],
       Number(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES[tf]) || 1,
@@ -878,11 +1202,12 @@ function mapMonitorMarket(stockCode) {
 }
 
 function normalizeMonitorSymbolType(value = '', market = '') {
+  const marketText = String(market || '').trim().toUpperCase();
+  if (marketText.startsWith('FUTURES')) return 'futures';
+
   const text = String(value || '').trim().toLowerCase();
   if (['futures', 'future', 'qh', '期货'].includes(text)) return 'futures';
   if (['stock', 'stocks', 'equity', '股票'].includes(text)) return 'stock';
-  const marketText = String(market || '').trim().toUpperCase();
-  if (marketText.startsWith('FUTURES')) return 'futures';
   return 'stock';
 }
 
@@ -900,6 +1225,25 @@ function normalizeFuturesQuoteToken(value = '') {
   return text.replace(/_/g, '.');
 }
 
+function resolveFuturesMonitorQuoteCode(symbol = {}) {
+  const explicitToken = normalizeFuturesQuoteToken(symbol.quoteCode || '');
+  if (/^\d{2,3}\.[A-Z0-9]+$/.test(explicitToken)) return explicitToken;
+
+  const rawToken = normalizeFuturesQuoteToken(symbol.stockCode || symbol.symbolCode || symbol.code || '');
+  if (/^\d{2,3}\.[A-Z0-9]+$/.test(rawToken)) return rawToken;
+
+  const marketText = String(symbol.market || '').trim().toUpperCase();
+  const marketMatched = marketText.match(/^FUTURES_(\d{2,3})$/);
+  if (marketMatched) {
+    const codeMatched = rawToken.match(/^(?:\d{2,3}\.)?([A-Z0-9]+)$/);
+    if (codeMatched) {
+      return `${marketMatched[1]}.${codeMatched[1]}`;
+    }
+  }
+
+  return explicitToken || rawToken;
+}
+
 function buildMonitorSymbolTokens(symbol = {}) {
   const tokens = new Set();
   const stockCode = String(symbol.stockCode || '').trim();
@@ -915,7 +1259,7 @@ function buildMonitorSymbolTokens(symbol = {}) {
   if (marketToken) tokens.add(marketToken);
 
   if (isFuturesMonitorSymbol(symbol)) {
-    const futuresToken = normalizeFuturesQuoteToken(stockCode);
+    const futuresToken = resolveFuturesMonitorQuoteCode(symbol);
     if (futuresToken) {
       tokens.add(futuresToken);
       tokens.add(futuresToken.replace(/[._-]/g, ''));
@@ -952,17 +1296,18 @@ export const stockMonitorService = {
       symbols: (grouped.get(category.id) || []).map((symbol) => {
         const symbolType = normalizeMonitorSymbolType(symbol.symbolType, symbol.market);
         if (symbolType === 'futures') {
-          const quoteCode = normalizeFuturesQuoteToken(symbol.stockCode);
+          const quoteCode = resolveFuturesMonitorQuoteCode(symbol);
           const marketText = String(symbol.market || '').trim().toUpperCase();
           const matched = marketText.match(/^FUTURES_(\d{2,3})$/);
           const futuresMarket = matched ? Number(matched[1]) : null;
+          const pureCode = String(quoteCode || '').split('.').pop() || quoteCode;
           return {
             ...symbol,
             symbolType: 'futures',
             quoteCode,
             tradingHours: getOfficialFuturesTradingHours({
               quoteCode,
-              code: quoteCode,
+              code: pureCode,
               market: Number.isFinite(futuresMarket) ? futuresMarket : null,
             }) || null,
           };
@@ -1363,12 +1708,15 @@ export const stockMonitorService = {
 
     let futuresItems = [];
     if (futuresSymbols.length) {
+      const resolveFuturesMonitorToken = (item = {}) => (
+        resolveFuturesMonitorQuoteCode(item)
+      );
       const nameMap = Object.fromEntries(
-        futuresSymbols.map((item) => [normalizeFuturesQuoteToken(item.stockCode), item.name]),
+        futuresSymbols.map((item) => [resolveFuturesMonitorToken(item), item.name]),
       );
       try {
         const futuresPayload = await futuresService.getMonitorByQuoteCodes({
-          quoteCode: futuresSymbols.map((item) => normalizeFuturesQuoteToken(item.stockCode)),
+          quoteCode: futuresSymbols.map((item) => resolveFuturesMonitorToken(item)).filter(Boolean),
           timeframe,
           limit,
           nameMap,
@@ -1386,7 +1734,7 @@ export const stockMonitorService = {
         });
 
         futuresItems = futuresSymbols.map((symbol) => {
-          const token = normalizeFuturesQuoteToken(symbol.stockCode);
+          const token = resolveFuturesMonitorToken(symbol);
           const source = futuresMap.get(token) || futuresMap.get(token.replace(/[._-]/g, '')) || null;
           const marketText = String(symbol.market || '').trim().toUpperCase();
           const marketMatched = marketText.match(/^FUTURES_(\d{2,3})$/);
@@ -1443,18 +1791,18 @@ export const stockMonitorService = {
           };
         });
       } catch (error) {
-        futuresItems = futuresSymbols.map((symbol) => ({
-          id: symbol.id,
-          categoryId: symbol.categoryId,
-          categoryName: categoryMap.get(symbol.categoryId)?.name || '-',
-          name: symbol.name,
-          quoteCode: normalizeFuturesQuoteToken(symbol.stockCode) || symbol.stockCode,
-          stockCode: normalizeFuturesQuoteToken(symbol.stockCode) || symbol.stockCode,
-          market: symbol.market,
-          code: normalizeFuturesQuoteToken(symbol.stockCode) || symbol.stockCode,
-          symbolType: 'futures',
-          tradingHours: symbol.tradingHours || null,
-          timeframe,
+          futuresItems = futuresSymbols.map((symbol) => ({
+            id: symbol.id,
+            categoryId: symbol.categoryId,
+            categoryName: categoryMap.get(symbol.categoryId)?.name || '-',
+            name: symbol.name,
+            quoteCode: resolveFuturesMonitorToken(symbol) || symbol.stockCode,
+            stockCode: resolveFuturesMonitorToken(symbol) || symbol.stockCode,
+            market: symbol.market,
+            code: resolveFuturesMonitorToken(symbol) || symbol.stockCode,
+            symbolType: 'futures',
+            tradingHours: symbol.tradingHours || null,
+            timeframe,
           timeframeLabel: STOCK_MONITOR_TIMEFRAME_MAP[timeframe].label,
           quote: null,
           candles: [],

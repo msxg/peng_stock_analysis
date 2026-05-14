@@ -137,6 +137,24 @@ function toXTickType(stockCode) {
   return null;
 }
 
+function resolveMootdxAshareCode(stockCode = '') {
+  const normalized = normalizeStockCode(stockCode);
+  const prefixed = normalized.match(/^(SH|SZ)(\d{6})$/);
+  if (prefixed) {
+    return {
+      symbol: prefixed[2],
+      market: prefixed[1] === 'SH' ? 1 : 0,
+    };
+  }
+  if (/^\d{6}$/.test(normalized)) {
+    return {
+      symbol: normalized,
+      market: normalized.startsWith('6') ? 1 : 0,
+    };
+  }
+  return null;
+}
+
 function toEastmoneySecId(stockCode) {
   const normalized = normalizeStockCode(stockCode);
   const sh = normalized.match(/^SH(\d{6})$/);
@@ -190,6 +208,27 @@ function normalizeTradeDay(value = '') {
     return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
   }
   return '';
+}
+
+function todayTradeDayText() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function isWeekendNow() {
+  const now = new Date();
+  const day = now.getDay();
+  return day === 0 || day === 6;
+}
+
+function isTodayTradeDayMissing(rows = []) {
+  if (!Array.isArray(rows) || !rows.length) return true;
+  const today = todayTradeDayText();
+  const lastDate = String(rows[rows.length - 1]?.date || '').slice(0, 10);
+  return !lastDate || lastDate < today;
 }
 
 async function fetchWithTimeout(url, options = {}, { timeoutMs = 10000, timeoutMessage = '请求超时' } = {}) {
@@ -362,7 +401,10 @@ function upsertLocalDailyBars(stockCode = '', rows = [], source = 'external') {
         const high = Number(item.high || close);
         const low = Number(item.low || close);
         const volume = Number(item.volume || 0);
-        const pre = Number.isFinite(prevClose) ? prevClose : close;
+        const explicitPre = Number(item.preClose);
+        const pre = (Number.isFinite(explicitPre) && explicitPre > 0)
+          ? explicitPre
+          : (Number.isFinite(prevClose) ? prevClose : close);
         const change = close - pre;
         const pctChg = pre ? (change / pre) * 100 : 0;
         insert.run({
@@ -585,6 +627,186 @@ async function requestXTickRealtimeQuote(stockCode) {
     tradeTime: toLocalDateTime(row?.time, null),
     dataSource: 'xtick.order.lv1',
     fetchedAt: nowLocalDateTime(),
+  };
+}
+
+async function requestMootdxRealtimeQuote(stockCode) {
+  const enabled = String(env.STOCK_INTRADAY_MOOTDX_ENABLED || 'false').trim().toLowerCase() === 'true';
+  if (!enabled) {
+    throw new HttpError(503, 'mootdx实时报价源已关闭');
+  }
+
+  const normalized = normalizeStockCode(stockCode);
+  const market = inferMarket(normalized);
+  if (market !== 'CN_SH' && market !== 'CN_SZ') {
+    throw new HttpError(400, 'mootdx实时报价源仅支持A股');
+  }
+
+  const target = resolveMootdxAshareCode(normalized);
+  if (!target) {
+    throw new HttpError(400, 'mootdx实时报价源暂不支持该代码格式');
+  }
+
+  const pyScript = [
+    'import json,sys',
+    'from mootdx.quotes import Quotes',
+    'symbol = sys.argv[1]',
+    'market = int(sys.argv[2])',
+    "client = Quotes.factory(market='std')",
+    "feed = client.quotes(symbol=[symbol], market=market)",
+    'if feed is None or len(feed) == 0:',
+    "  raise RuntimeError('mootdx quotes empty')",
+    "row = feed.iloc[0].to_dict() if hasattr(feed, 'iloc') else list(feed)[0]",
+    'print(json.dumps(row, ensure_ascii=False, default=str))',
+  ].join('\n');
+
+  const timeoutMs = Math.max(1200, Number(env.STOCK_INTRADAY_MOOTDX_TIMEOUT_MS) || 4500);
+
+  let payload = null;
+  try {
+    const { stdout } = await execFileAsync(
+      env.STOCK_INTRADAY_MOOTDX_PYTHON_BIN || 'python3',
+      ['-c', pyScript, target.symbol, String(target.market)],
+      {
+        timeout: timeoutMs,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+    const text = String(stdout || '').trim();
+    if (!text) {
+      throw new HttpError(404, 'mootdx实时报价为空');
+    }
+    payload = JSON.parse(text);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(502, `mootdx实时报价请求失败: ${String(error?.message || 'unknown')}`);
+  }
+
+  const price = Number(payload?.price || 0);
+  const prevClose = Number(payload?.last_close || 0);
+  const open = Number(payload?.open || 0);
+  const high = Number(payload?.high || 0);
+  const low = Number(payload?.low || 0);
+  const volume = Number(payload?.vol ?? payload?.volume ?? 0);
+  const amount = Number(payload?.amount || 0);
+  const timeText = String(payload?.servertime || '').trim();
+  const hhmmss = timeText.match(/^\d{2}:\d{2}:\d{2}/)?.[0] || '';
+
+  return {
+    stockCode: normalized,
+    symbol: normalized,
+    stockName: normalized,
+    market,
+    price: Number.isFinite(price) ? price : 0,
+    open: Number.isFinite(open) ? open : 0,
+    high: Number.isFinite(high) ? high : 0,
+    low: Number.isFinite(low) ? low : 0,
+    prevClose: Number.isFinite(prevClose) ? prevClose : 0,
+    change: Number.isFinite(price) && Number.isFinite(prevClose) ? (price - prevClose) : 0,
+    changePct: Number.isFinite(price) && Number.isFinite(prevClose) && prevClose !== 0
+      ? Number((((price - prevClose) / prevClose) * 100).toFixed(2))
+      : 0,
+    volume: Number.isFinite(volume) ? volume : 0,
+    amount: Number.isFinite(amount) ? amount : 0,
+    volumeRatio: 1,
+    ma5: null,
+    ma10: null,
+    ma20: null,
+    tradeTime: hhmmss ? `${todayTradeDayText()} ${hhmmss}` : null,
+    dataSource: 'mootdx.quotes',
+    fetchedAt: nowLocalDateTime(),
+  };
+}
+
+async function requestRealtimeQuoteForDailySynthesis(stockCode) {
+  const errors = [];
+
+  try {
+    return await requestMootdxRealtimeQuote(stockCode);
+  } catch (error) {
+    errors.push(`mootdx: ${String(error?.message || 'unknown')}`);
+  }
+
+  try {
+    return await requestTencentRealtimeQuote(stockCode);
+  } catch (error) {
+    errors.push(`tencent: ${String(error?.message || 'unknown')}`);
+  }
+
+  try {
+    return await requestXTickRealtimeQuote(stockCode);
+  } catch (error) {
+    errors.push(`xtick: ${String(error?.message || 'unknown')}`);
+  }
+
+  throw new HttpError(502, `实时日线补齐失败: ${errors.join(' | ')}`);
+}
+
+function buildRealtimeDailyBarFromQuote(quote = {}, previousBar = null) {
+  const tradeDay = todayTradeDayText();
+  const prevClose = Number(quote?.prevClose);
+  const fallbackPrevClose = Number(previousBar?.close);
+  const normalizedPrevClose = Number.isFinite(prevClose) && prevClose > 0
+    ? prevClose
+    : (Number.isFinite(fallbackPrevClose) && fallbackPrevClose > 0 ? fallbackPrevClose : 0);
+
+  const price = Number(quote?.price);
+  const close = Number.isFinite(price) && price > 0
+    ? price
+    : normalizedPrevClose;
+  if (!Number.isFinite(close) || close <= 0) return null;
+
+  const openRaw = Number(quote?.open);
+  const highRaw = Number(quote?.high);
+  const lowRaw = Number(quote?.low);
+  const open = Number.isFinite(openRaw) && openRaw > 0 ? openRaw : close;
+  const high = Number.isFinite(highRaw) && highRaw > 0 ? Math.max(highRaw, open, close) : Math.max(open, close);
+  const low = Number.isFinite(lowRaw) && lowRaw > 0 ? Math.min(lowRaw, open, close) : Math.min(open, close);
+  const volumeRaw = Number(quote?.volume);
+  const amountRaw = Number(quote?.amount);
+
+  return {
+    ts: dateToTsSeconds(tradeDay),
+    date: tradeDay,
+    open,
+    high,
+    low,
+    close,
+    volume: Number.isFinite(volumeRaw) ? volumeRaw : 0,
+    amount: Number.isFinite(amountRaw) ? amountRaw : 0,
+    preClose: normalizedPrevClose > 0 ? normalizedPrevClose : close,
+    source: String(quote?.dataSource || '').trim() || 'realtime',
+  };
+}
+
+async function ensureTodayRealtimeDailyBar({
+  stockCode,
+  rows = [],
+  enabled = false,
+} = {}) {
+  const list = Array.isArray(rows) ? rows.slice() : [];
+  if (!enabled) return { rows: list, appended: false, source: null, warning: null };
+  if (isWeekendNow()) return { rows: list, appended: false, source: null, warning: '周末跳过实时日线补齐' };
+  if (!isTodayTradeDayMissing(list)) return { rows: list, appended: false, source: null, warning: null };
+
+  const quote = await requestRealtimeQuoteForDailySynthesis(stockCode);
+  const todayBar = buildRealtimeDailyBarFromQuote(quote, list[list.length - 1] || null);
+  if (!todayBar) {
+    throw new HttpError(502, '实时行情可用，但无法生成当日日线');
+  }
+
+  const today = todayTradeDayText();
+  const output = list.filter((item) => String(item?.date || '').slice(0, 10) !== today);
+  output.push(todayBar);
+  output.sort((a, b) => String(a?.date || '').localeCompare(String(b?.date || '')));
+
+  upsertLocalDailyBars(stockCode, [todayBar], `realtime.synthetic.1d:${todayBar.source}`);
+
+  return {
+    rows: output,
+    appended: true,
+    source: `realtime.synthetic.1d:${todayBar.source}`,
+    warning: '当日K线由实时行情合成，收盘后将由正式日线覆盖',
   };
 }
 
@@ -1304,7 +1526,12 @@ export const stockDataService = {
     return requestXTickMinuteSeries(stockCode, { limit });
   },
 
-  async getHistory(stockCode, { days = 180, interval = '1d', localMode = 'auto' } = {}) {
+  async getHistory(stockCode, {
+    days = 180,
+    interval = '1d',
+    localMode = 'auto',
+    includeTodayRealtime = false,
+  } = {}) {
     const normalized = normalizeStockCode(stockCode);
     const symbol = toYahooSymbol(normalized);
     const range = getRangeFromDays(days);
@@ -1378,6 +1605,42 @@ export const stockDataService = {
         }
         if (payload?.rows?.length) {
           upsertLocalDailyBars(normalized, payload.rows, source);
+        }
+      }
+
+      const shouldInjectTodayRealtime = (
+        String(interval || '1d').trim() === '1d'
+        && includeTodayRealtime === true
+      );
+      if (shouldInjectTodayRealtime) {
+        try {
+          const injected = await ensureTodayRealtimeDailyBar({
+            stockCode: normalized,
+            rows: payload?.rows || [],
+            enabled: true,
+          });
+          payload = {
+            ...(payload || {}),
+            meta: {
+              ...(payload?.meta || {}),
+              todaySynthetic: injected.appended,
+              ...(injected.warning ? { todaySyntheticWarning: injected.warning } : {}),
+            },
+            rows: injected.rows,
+          };
+          if (injected.appended && injected.source) {
+            source = injected.source;
+          }
+        } catch (error) {
+          // 盘中实时日线补齐失败时不阻断主流程，保持历史线可用
+          payload = {
+            ...(payload || {}),
+            meta: {
+              ...(payload?.meta || {}),
+              todaySynthetic: false,
+              todaySyntheticError: String(error?.message || 'unknown'),
+            },
+          };
         }
       }
     } else {
