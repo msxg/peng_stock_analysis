@@ -94,16 +94,17 @@ function formatTextDateTime(value) {
   return text;
 }
 
-function formatHoverTimeLabel(value) {
+function formatHoverTimeLabel(value, { withTime = true } = {}) {
   const text = String(value || '').trim();
   if (text) {
     const matched = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
     if (matched) {
+      const yy = matched[1].slice(-2);
       const mm = matched[2];
       const dd = matched[3];
       const hh = matched[4] || '00';
       const mi = matched[5] || '00';
-      return `${mm}-${dd} ${hh}:${mi}`;
+      return withTime ? `${mm}-${dd} ${hh}:${mi}` : `${yy}-${mm}-${dd}`;
     }
   }
 
@@ -113,9 +114,10 @@ function formatHoverTimeLabel(value) {
     if (!Number.isNaN(dt.getTime())) {
       const mm = String(dt.getMonth() + 1).padStart(2, '0');
       const dd = String(dt.getDate()).padStart(2, '0');
+      const yy = String(dt.getFullYear()).slice(-2);
       const hh = String(dt.getHours()).padStart(2, '0');
       const mi = String(dt.getMinutes()).padStart(2, '0');
-      return `${mm}-${dd} ${hh}:${mi}`;
+      return withTime ? `${mm}-${dd} ${hh}:${mi}` : `${yy}-${mm}-${dd}`;
     }
   }
   return '--';
@@ -765,7 +767,7 @@ export function KlineMarketPanel({ initialCode = '' }) {
     }
 
     const daysByTimeframe = {
-      '1d': 360,
+      '1d': 180,
       '1w': 1000,
       '1M': 1800,
     };
@@ -967,6 +969,8 @@ export function KlineMarketPanel({ initialCode = '' }) {
     if (!hoveredCandle) return null;
     const rows = Array.isArray(chartData) ? chartData : [];
     if (!rows.length) return null;
+    const activeTimeframe = String(result?.timeframe || timeframe || '').trim();
+    const isIntraday = /^(\d+)(s|m)$/.test(activeTimeframe);
     const targetTs = Number(hoveredCandle?.time);
     const targetKey = String(hoveredCandle?.time || '');
     const normalizedTargetTs = Number.isFinite(targetTs) ? targetTs : null;
@@ -979,7 +983,9 @@ export function KlineMarketPanel({ initialCode = '' }) {
 
     const row = rows[resolvedIndex];
     const price = toNum(row?.close);
-    const prevClose = toNum(snapshot?.prevClose);
+    const prevClose = resolvedIndex > 0
+      ? toNum(rows[resolvedIndex - 1]?.close)
+      : toNum(snapshot?.prevClose);
 
     let cumulativeAmount = 0;
     let cumulativeVolume = 0;
@@ -1003,14 +1009,20 @@ export function KlineMarketPanel({ initialCode = '' }) {
       : null;
 
     return {
-      timeLabel: formatHoverTimeLabel(row?.dateText || row?.time),
+      timeLabel: formatHoverTimeLabel(row?.dateText || row?.time, { withTime: isIntraday }),
+      isIntraday,
+      open: toNum(row?.open),
+      close: toNum(row?.close),
+      high: toNum(row?.high),
+      low: toNum(row?.low),
+      prevClose,
       latest: price,
       change,
       changePct,
       avgPrice,
       volume: toNum(row?.value),
     };
-  }, [chartData, hoveredCandle, snapshot?.prevClose]);
+  }, [chartData, hoveredCandle, result?.timeframe, snapshot?.prevClose, timeframe]);
   const hoverTooltipLayout = useMemo(() => {
     const axisSafeRight = 86;
     const edgePadding = 8;
@@ -1297,6 +1309,30 @@ export function KlineMarketPanel({ initialCode = '' }) {
                       <span className="text-muted-foreground">时间:</span>
                       <span>{hoverDetail.timeLabel}</span>
                     </div>
+                    {!hoverDetail.isIntraday ? (
+                      <>
+                        <div className="flex items-center gap-1">
+                          <span className="text-muted-foreground">昨收:</span>
+                          <span>{formatNum(hoverDetail.prevClose, 2)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-muted-foreground">开盘:</span>
+                          <span>{formatNum(hoverDetail.open, 2)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-muted-foreground">收盘:</span>
+                          <span>{formatNum(hoverDetail.close, 2)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-muted-foreground">最高:</span>
+                          <span>{formatNum(hoverDetail.high, 2)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-muted-foreground">最低:</span>
+                          <span>{formatNum(hoverDetail.low, 2)}</span>
+                        </div>
+                      </>
+                    ) : null}
                     <div className="flex items-center gap-1">
                       <span className="text-muted-foreground">最新:</span>
                       <span className={Number(hoverDetail.change || 0) > 0 ? 'text-rose-600' : Number(hoverDetail.change || 0) < 0 ? 'text-emerald-600' : ''}>
@@ -1315,10 +1351,12 @@ export function KlineMarketPanel({ initialCode = '' }) {
                         {formatSigned(hoverDetail.change, 2)}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <span className="text-muted-foreground">均价:</span>
-                      <span>{formatNum(hoverDetail.avgPrice, 2)}</span>
-                    </div>
+                    {hoverDetail.isIntraday ? (
+                      <div className="flex items-center gap-1">
+                        <span className="text-muted-foreground">均价:</span>
+                        <span>{formatNum(hoverDetail.avgPrice, 2)}</span>
+                      </div>
+                    ) : null}
                     <div className="flex items-center gap-1">
                       <span className="text-muted-foreground">成交量:</span>
                       <span>{formatCompact(hoverDetail.volume)}</span>
