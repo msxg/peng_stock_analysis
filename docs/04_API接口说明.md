@@ -151,6 +151,8 @@
 
 - `GET /futures/timeframes`
 - `GET /futures/presets`（动态预设品种，支持 `?force=1` 强制刷新缓存）
+- `GET /futures/resolve?code=au&name=沪金`
+  - 用于将短代码、别名或中文名称解析为标准期货 `quoteCode`。
 - `GET /futures/categories`
 - `POST /futures/categories`
   ```json
@@ -195,6 +197,8 @@
   - 代码说明：
     - 推荐使用标准 `QuoteID` 形式，如 `101.GC00Y`、`142.sc2605`
     - 系统会对常见名称做自动映射（如“黄金”->`101.GC00Y`）
+  - 单品种查询说明：
+    - 只传 `quoteCode` 时，接口可直接返回单个品种的K线与行情，不依赖分类配置。
 
 ## 7. 股票与导入
 
@@ -245,6 +249,50 @@
     "failOpen": true
   }
   ```
+
+## 7.1 K线行情页依赖接口
+
+- 股票建议：`GET /stock-basics/suggest?q=关键词&limit=20`
+- 股票分时K线（单品种独立入口）：`GET /stock-monitor/kline?stockCode=600519&timeframe=1m&limit=1800`
+- 股票实时行情：`GET /stocks/:stockCode/quote`（日/周/月概览或备用）
+- 股票历史K线：`GET /stocks/:stockCode/history?days=360`（日/周/月）
+- 期货代码解析：`GET /futures/resolve?code=输入值&name=名称提示`
+- 期货单品种K线：`GET /futures/monitor?quoteCode=101.GC00Y&timeframe=1d&limit=160`
+
+页面规则：
+
+- 股票默认展示 `分时(1m)`；`1d` 直出，`1w` / `1M` 由日线聚合生成
+- 期货展示接口支持的标准粒度
+- 图表优先展示可用数据，失败时保留错误提示而不整页崩溃
+
+### 7.2 股票单品种分时K线接口
+
+- `GET /stock-monitor/kline?stockCode=600519&timeframe=1m&limit=240`
+- 用途：K线行情页查询任意股票单品种，不依赖“行情监测分类”
+- 响应核心字段：
+```json
+{
+  "stockCode": "600519",
+  "quoteCode": "600519",
+  "name": "贵州茅台",
+  "symbolType": "stock",
+  "timeframe": "1m",
+  "timeframeLabel": "1分钟",
+  "quote": {
+    "price": 1335.04,
+    "change": -7.13,
+    "changePct": -0.53,
+    "tradeTime": "2026-05-15 10:14:32",
+    "dataSource": "tencent.qt"
+  },
+  "candles": [
+    { "date": "2026-05-15 10:14:00", "open": 1335.22, "high": 1335.22, "low": 1335.02, "close": 1335.04, "volume": 1200, "amount": 1602048 }
+  ],
+  "candleDataSource": "stock_intraday_bars",
+  "warning": null,
+  "error": null
+}
+```
 
 ## 8. 回测
 

@@ -1048,29 +1048,7 @@ async function fetchStockIntraday1mSeries(stockCode, limit = 120) {
   try {
     return await requestYahooIntraday(stockCode, normalizedLimit);
   } catch (yahooError) {
-    const fallback = await stockDataService.getHistory(stockCode, { days: Math.max(normalizedLimit, 120) });
-    const candles = (fallback?.history || [])
-      .map((item) => ({
-        date: item.date,
-        open: Number(item.open || item.close || 0),
-        high: Number(item.high || item.close || 0),
-        low: Number(item.low || item.close || 0),
-        close: Number(item.close || 0),
-        volume: Number(item.volume || 0),
-        amount: 0,
-      }))
-      .filter((item) => Number.isFinite(item.close) && item.close > 0)
-      .slice(-normalizedLimit);
-
-    if (!candles.length) {
-      throw yahooError;
-    }
-
-    return {
-      candles,
-      candleDataSource: `stockData.${fallback?.quote?.dataSource || 'fallback'}`,
-      warning: `分钟数据不可用，已降级为历史线: ${yahooError.message}`,
-    };
+    throw yahooError;
   }
 }
 
@@ -1099,7 +1077,16 @@ async function getStockMonitorSeries(stockCode, timeframe = '1m', limit = 120) {
     }))
     .filter((item) => Number.isFinite(item.close) && item.close > 0);
 
-  if (localCandles.length) {
+  const isIntradayTimeframe = Object.prototype.hasOwnProperty.call(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES, tf);
+  const localFreshness = String(localResult?.freshness || '');
+  const localIsFresh = localFreshness === 'fresh';
+  const staleLocalFallback = localCandles.length ? {
+    candles: localCandles.slice(-normalizedLimit),
+    candleDataSource: localResult.source || 'local.query',
+    warning: '本地分钟数据已过期，正在等待实时源更新',
+  } : null;
+
+  if (localCandles.length && (!isIntradayTimeframe || localIsFresh)) {
     return {
       candles: localCandles.slice(-normalizedLimit),
       candleDataSource: localResult.source || 'local.query',
@@ -1109,56 +1096,95 @@ async function getStockMonitorSeries(stockCode, timeframe = '1m', limit = 120) {
     };
   }
 
-  if (Object.prototype.hasOwnProperty.call(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES, tf)) {
+  if (isIntradayTimeframe) {
     if (tf === '1m') {
-      const minuteSeries = await fetchStockIntraday1mSeries(stockCode, normalizedLimit);
-      persistRealtimeIntradayBars({
-        stockCode,
-        timeframe: '1m',
-        candles: minuteSeries.candles || [],
-        candleDataSource: minuteSeries.candleDataSource || '',
-      });
-      return minuteSeries;
+      try {
+        const minuteSeries = await fetchStockIntraday1mSeries(stockCode, normalizedLimit);
+        persistRealtimeIntradayBars({
+          stockCode,
+          timeframe: '1m',
+          candles: minuteSeries.candles || [],
+          candleDataSource: minuteSeries.candleDataSource || '',
+        });
+        return minuteSeries;
+      } catch (error) {
+        if (staleLocalFallback) {
+          return {
+            ...staleLocalFallback,
+            warning: joinWarningText(
+              staleLocalFallback.warning,
+              `实时分钟源失败，已回退本地缓存: ${error?.message || '未知错误'}`,
+            ),
+          };
+        }
+        throw error;
+      }
     }
 
     if (tf === '30s') {
-      const minuteSeries = await fetchStockIntraday1mSeries(stockCode, normalizedLimit);
+      try {
+        const minuteSeries = await fetchStockIntraday1mSeries(stockCode, normalizedLimit);
+        persistRealtimeIntradayBars({
+          stockCode,
+          timeframe: '1m',
+          candles: minuteSeries.candles || [],
+          candleDataSource: minuteSeries.candleDataSource || '',
+        });
+        return {
+          candles: (minuteSeries.candles || []).slice(-normalizedLimit),
+          candleDataSource: `${minuteSeries.candleDataSource || 'unknown'}+alias.30s<-1m`,
+          warning: joinWarningText(minuteSeries.warning, '30秒K线暂使用1分钟数据近似'),
+        };
+      } catch (error) {
+        if (staleLocalFallback) {
+          return {
+            ...staleLocalFallback,
+            warning: joinWarningText(
+              staleLocalFallback.warning,
+              `实时分钟源失败，已回退本地缓存: ${error?.message || '未知错误'}`,
+            ),
+          };
+        }
+        throw error;
+      }
+    }
+
+    try {
+      const minuteWindow = Math.max(
+        normalizedLimit * Math.max(1, Math.ceil(Number(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES[tf]) || 1)),
+        120,
+      );
+      const minuteSeries = await fetchStockIntraday1mSeries(stockCode, minuteWindow);
       persistRealtimeIntradayBars({
         stockCode,
         timeframe: '1m',
         candles: minuteSeries.candles || [],
         candleDataSource: minuteSeries.candleDataSource || '',
       });
+      const candles = aggregateIntradayByMinutes(
+        minuteSeries.candles || [],
+        Number(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES[tf]) || 1,
+      );
+      if (!candles.length) {
+        throw new HttpError(404, `${tf} 数据为空`);
+      }
       return {
-        candles: (minuteSeries.candles || []).slice(-normalizedLimit),
-        candleDataSource: `${minuteSeries.candleDataSource || 'unknown'}+alias.30s<-1m`,
-        warning: joinWarningText(minuteSeries.warning, '30秒K线暂使用1分钟数据近似'),
+        candles: candles.slice(-normalizedLimit),
+        candleDataSource: `${minuteSeries.candleDataSource || 'unknown'}+agg.${tf}`,
+        warning: minuteSeries.warning || null,
       };
+    } catch (error) {
+      if (staleLocalFallback) {
+        return {
+          ...staleLocalFallback,
+          warning: joinWarningText(
+            staleLocalFallback.warning,
+            `实时分钟源失败，已回退本地缓存: ${error?.message || '未知错误'}`,
+          ),
+        };
+      }
+      throw error;
     }
-
-    const minuteWindow = Math.max(
-      normalizedLimit * Math.max(1, Math.ceil(Number(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES[tf]) || 1)),
-      120,
-    );
-    const minuteSeries = await fetchStockIntraday1mSeries(stockCode, minuteWindow);
-    persistRealtimeIntradayBars({
-      stockCode,
-      timeframe: '1m',
-      candles: minuteSeries.candles || [],
-      candleDataSource: minuteSeries.candleDataSource || '',
-    });
-    const candles = aggregateIntradayByMinutes(
-      minuteSeries.candles || [],
-      Number(STOCK_MONITOR_INTRADAY_INTERVAL_MINUTES[tf]) || 1,
-    );
-    if (!candles.length) {
-      throw new HttpError(404, `${tf} 数据为空`);
-    }
-    return {
-      candles: candles.slice(-normalizedLimit),
-      candleDataSource: `${minuteSeries.candleDataSource || 'unknown'}+agg.${tf}`,
-      warning: minuteSeries.warning || null,
-    };
   }
 
   const days = tf === '1M'
@@ -1546,6 +1572,99 @@ export const stockMonitorService = {
       moved: true,
       direction,
       item: stockMonitorRepository.getSymbolById(id),
+    };
+  },
+
+  async getSingleStockKline(payload = {}) {
+    const parsedCodes = parseMonitorStockCodes([
+      payload.stockCode,
+      payload.quoteCode,
+      payload.code,
+    ]);
+    const stockCode = parsedCodes[0] || '';
+    if (!stockCode) {
+      throw new HttpError(400, 'stockCode 不能为空');
+    }
+
+    const timeframe = String(payload.timeframe || '1m');
+    if (!STOCK_MONITOR_TIMEFRAME_MAP[timeframe]) {
+      throw new HttpError(400, `不支持的时间粒度: ${timeframe}`);
+    }
+
+    const hasExplicitLimit = payload.limit !== undefined && payload.limit !== null && payload.limit !== '';
+    const defaultLimit = STOCK_MONITOR_DEFAULT_LIMIT_MAP[timeframe]
+      || (STOCK_MONITOR_LONG_KLINE_KEYS.has(timeframe) ? 100 : 120);
+    const parsedLimit = Number(hasExplicitLimit ? payload.limit : defaultLimit);
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : defaultLimit;
+
+    const market = mapMonitorMarket(stockCode);
+    const localBasic = stockBasicsRepository.findByMarketAndCode(market, stockCode);
+    const symbol = {
+      stockCode,
+      market,
+      name: String(payload.name || localBasic?.name || stockCode).trim() || stockCode,
+    };
+
+    const quotePromise = stockDataService.getQuote(stockCode)
+      .then((data) => ({ ok: true, data }))
+      .catch((error) => ({ ok: false, error }));
+    const candlesResult = await getStockMonitorSeries(stockCode, timeframe, limit)
+      .then((data) => ({ ok: true, data }))
+      .catch((error) => ({ ok: false, error }));
+    const quoteResult = await quotePromise;
+
+    if (!candlesResult.ok) {
+      throw new HttpError(502, candlesResult.error?.message || 'K线查询失败');
+    }
+
+    const warningList = [];
+    let finalQuote = quoteResult.ok ? quoteResult.data : null;
+    if (candlesResult.data.warning) {
+      warningList.push(candlesResult.data.warning);
+    }
+
+    if (!finalQuote) {
+      const fallbackQuote = buildQuoteFallbackFromCandles(symbol, candlesResult.data.candles || []);
+      if (fallbackQuote) {
+        finalQuote = fallbackQuote;
+        if (!quoteResult.ok) {
+          warningList.push(`实时行情不可用，已使用分钟K线末值估算: ${quoteResult.error?.message || '未知错误'}`);
+        }
+      }
+    }
+
+    if (!finalQuote) {
+      throw new HttpError(502, quoteResult.ok ? '实时报价为空' : `实时行情失败: ${quoteResult.error?.message || '未知错误'}`);
+    }
+
+    const warning = warningList
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .join(' | ') || null;
+
+    return {
+      stockCode,
+      quoteCode: stockCode,
+      code: stockCode,
+      name: symbol.name,
+      market,
+      symbolType: 'stock',
+      timeframe,
+      timeframeLabel: STOCK_MONITOR_TIMEFRAME_MAP[timeframe].label,
+      tradingHours: getOfficialStockTradingHours({
+        market: localBasic?.market || market,
+        subMarket: localBasic?.subMarket || '',
+      }) || null,
+      quote: {
+        ...finalQuote,
+        tradeTime: toLocalDateTime(finalQuote.tradeTime, finalQuote.tradeTime || null),
+        fetchedAt: toLocalDateTime(finalQuote.fetchedAt, nowLocalDateTime()),
+        quoteCode: stockCode,
+      },
+      candles: candlesResult.data.candles || [],
+      candleDataSource: candlesResult.data.candleDataSource || null,
+      warning,
+      error: null,
     };
   },
 

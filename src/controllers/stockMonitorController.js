@@ -65,4 +65,16 @@ export const stockMonitorController = {
     });
     res.json(payload);
   },
+
+  async kline(req, res) {
+    const payload = await stockMonitorService.getSingleStockKline({
+      stockCode: req.query.stockCode,
+      quoteCode: req.query.quoteCode,
+      code: req.query.code,
+      name: req.query.name,
+      timeframe: req.query.timeframe,
+      limit: req.query.limit,
+    });
+    res.json(payload);
+  },
 };

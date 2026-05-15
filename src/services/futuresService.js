@@ -3496,6 +3496,13 @@ export const futuresService = {
     // 解析参数
     const categoryId = payload.categoryId ? Number(payload.categoryId) : null;
     const quoteCodes = parseMonitorQuoteCodes(payload.quoteCode);
+    if (!categoryId && quoteCodes.length) {
+      return this.getMonitorByQuoteCodes({
+        quoteCode: quoteCodes,
+        timeframe: payload.timeframe,
+        limit: payload.limit,
+      });
+    }
     const quoteCodeSet = quoteCodes.length ? new Set(quoteCodes) : null;
     const timeframe = String(payload.timeframe || '30s');
 

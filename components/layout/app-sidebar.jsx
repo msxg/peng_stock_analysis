@@ -47,6 +47,7 @@ const navGroups = [
     items: [
       { href: '/futures', label: '期货监测', icon: TrendingUp },
       { href: '/stock-monitor', label: '行情监测', icon: CandlestickChart },
+      { href: '/kline', label: 'K线行情', icon: CandlestickChart },
       { href: '/stock-screening', label: '条件选股', icon: Search },
       { href: '/自选股', label: '自选股', icon: CandlestickChart },
       { href: '/quote-query', label: '行情查询', icon: Search },

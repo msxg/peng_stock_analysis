@@ -90,6 +90,7 @@ router.post('/stock-monitor/symbols', asyncHandler(stockMonitorController.create
 router.post('/stock-monitor/symbols/:symbolId/move', stockMonitorController.moveSymbol);
 router.delete('/stock-monitor/symbols/:symbolId', stockMonitorController.deleteSymbol);
 router.get('/stock-monitor/monitor', asyncHandler(stockMonitorController.monitor));
+router.get('/stock-monitor/kline', asyncHandler(stockMonitorController.kline));
 router.get('/strategy/bluechip/defaults', blueChipModeController.defaults);
 router.get('/strategy/bluechip/pools', bluechipPoolController.listPools);
 router.post('/strategy/bluechip/pools', bluechipPoolController.createPool);
