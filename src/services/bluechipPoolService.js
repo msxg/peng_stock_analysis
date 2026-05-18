@@ -229,6 +229,20 @@ export const bluechipPoolService = {
     return existing;
   },
 
+  clearPoolSymbols(poolId) {
+    const pid = Number(poolId);
+    if (!Number.isFinite(pid) || pid <= 0) throw new HttpError(400, 'poolId 非法');
+    const pool = bluechipPoolRepository.getPoolById(pid);
+    if (!pool) throw new HttpError(404, `标的池不存在: ${pid}`);
+    const cleared = bluechipPoolRepository.clearSymbolsByPoolId(pid);
+    return {
+      poolId: pid,
+      poolCode: pool.code,
+      poolName: pool.name,
+      cleared,
+    };
+  },
+
   resolvePoolMembers(poolCode) {
     const normalizedCode = normalizePoolCode(poolCode);
     const pool = bluechipPoolRepository.getPoolByCode(normalizedCode);

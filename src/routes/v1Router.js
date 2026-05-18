@@ -97,6 +97,7 @@ router.post('/strategy/bluechip/pools', bluechipPoolController.createPool);
 router.put('/strategy/bluechip/pools/:poolId', bluechipPoolController.updatePool);
 router.delete('/strategy/bluechip/pools/:poolId', bluechipPoolController.deletePool);
 router.post('/strategy/bluechip/pools/:poolId/symbols', bluechipPoolController.createSymbol);
+router.delete('/strategy/bluechip/pools/:poolId/symbols', bluechipPoolController.clearSymbols);
 router.put('/strategy/bluechip/pools/:poolId/symbols/:symbolId', bluechipPoolController.updateSymbol);
 router.delete('/strategy/bluechip/pools/:poolId/symbols/:symbolId', bluechipPoolController.deleteSymbol);
 router.post('/strategy/bluechip/analyze', asyncHandler(blueChipModeController.analyze));

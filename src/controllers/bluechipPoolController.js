@@ -42,4 +42,12 @@ export const bluechipPoolController = {
       item,
     });
   },
+
+  clearSymbols(req, res) {
+    const result = bluechipPoolService.clearPoolSymbols(req.params.poolId);
+    res.json({
+      cleared: true,
+      ...result,
+    });
+  },
 };

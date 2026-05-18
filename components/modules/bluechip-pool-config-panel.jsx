@@ -318,6 +318,39 @@ export function BluechipPoolConfigPanel() {
     }
   }
 
+  async function handleClearPoolSymbols() {
+    if (!selectedSymbolPool) {
+      setError('请先选择一个标的池');
+      return;
+    }
+    const total = Array.isArray(selectedSymbolPool.symbols)
+      ? selectedSymbolPool.symbols.filter((item) => item?.isActive !== false).length
+      : 0;
+    if (total <= 0) {
+      setNotice('当前标的池已是空');
+      return;
+    }
+    if (!window.confirm(`确认清空标的池「${selectedSymbolPool.name}」下全部 ${total} 条标的吗？`)) return;
+
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await clientApi.strategy.clearBluechipPoolSymbols(selectedSymbolPool.id);
+      if (String(editingSymbolId || '').trim()) {
+        setEditingSymbolId('');
+        setEditingSymbolForm({ stockCode: '', stockName: '' });
+      }
+      await refreshPoolData();
+      const cleared = Number(result?.cleared || 0);
+      setNotice(`标的池已清空：${cleared} 条`);
+    } catch (clearError) {
+      setError(clearError?.message || '清空标的池失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -474,10 +507,22 @@ export function BluechipPoolConfigPanel() {
                   </div>
                   <div>
                     <label className="mb-1 block text-xs text-transparent select-none" aria-hidden="true">操作</label>
-                    <Button type="button" className="w-full" onClick={handleCreateSymbol} disabled={saving || !selectedSymbolPool}>
-                      <Plus className="size-4" />
-                      添加代码
-                    </Button>
+                    <div className="grid gap-2">
+                      <Button type="button" className="w-full" onClick={handleCreateSymbol} disabled={saving || !selectedSymbolPool}>
+                        <Plus className="size-4" />
+                        添加代码
+                      </Button>
+                      <Button
+                        type="button"
+                        className="w-full"
+                        variant="outline"
+                        onClick={handleClearPoolSymbols}
+                        disabled={saving || !selectedSymbolPool}
+                      >
+                        <Trash2 className="size-4" />
+                        清空当前池标的
+                      </Button>
+                    </div>
                   </div>
                 </div>
                 {(symbolSuggesting || symbolSuggestError || symbolSuggestions.length > 0) && selectedSymbolPool ? (

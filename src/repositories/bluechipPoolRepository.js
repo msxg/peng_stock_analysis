@@ -151,4 +151,9 @@ export const bluechipPoolRepository = {
     const db = getDb();
     return db.prepare('DELETE FROM bluechip_pool_symbols WHERE id = ?').run(id).changes;
   },
+
+  clearSymbolsByPoolId(poolId) {
+    const db = getDb();
+    return db.prepare('DELETE FROM bluechip_pool_symbols WHERE pool_id = ?').run(Number(poolId)).changes;
+  },
 };
