@@ -227,8 +227,8 @@ function createRuleDraft() {
     leftName: 'close',
     leftMetricDays: '20',
     operator: '>',
-    rightType: 'indicator',
-    rightName: 'ma20',
+    rightType: 'field',
+    rightName: 'preClose',
     rightMetricDays: '20',
     rightConstValue: '0',
   };
@@ -629,7 +629,7 @@ export function StockScreeningPanel() {
     setActionBusy(true);
     setMessage('');
     try {
-      const chunkSize = 1000;
+      const chunkSize = 6000;
       let success = 0;
       let skipped = 0;
       let failed = 0;

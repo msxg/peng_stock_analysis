@@ -9,6 +9,8 @@ const SUPPORTED_MARKET = 'A';
 const DEFAULT_SUB_MARKETS = ['SH', 'SZ', 'BJ'];
 const DEFAULT_BOARD_SEGMENTS = ['MAIN', 'GEM', 'STAR'];
 const CALCULATION_MODES = new Set(['range', 'latest']);
+const SCREENING_QUERY_CACHE_TTL_MS = 5 * 60 * 1000;
+const SCREENING_QUERY_CACHE_MAX = 8;
 const OPERATORS = new Set(['>', '>=', '<', '<=', '==', '!=']);
 const FIELD_NAMES = new Set([
   'open',
@@ -43,6 +45,7 @@ const METRIC_NAMES = new Set([
   'maxDrawdown',
 ]);
 const SORT_ORDERS = new Set(['asc', 'desc']);
+const screeningQueryCache = new Map();
 
 function isDateText(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
@@ -563,8 +566,8 @@ function normalizeActionPayload(payload = {}) {
   if (!codes.length) {
     throw new HttpError(400, 'codes 不能为空');
   }
-  if (codes.length > 2000) {
-    throw new HttpError(400, 'codes 过多，单次最多 2000 条');
+  if (codes.length > 6000) {
+    throw new HttpError(400, 'codes 过多，单次最多 6000 条');
   }
   return codes;
 }
@@ -597,10 +600,79 @@ function sortByField(items = [], field = 'pctChgN', order = 'desc') {
   return source;
 }
 
+function buildQueryCacheKey(normalized = {}) {
+  return JSON.stringify({
+    market: normalized.market,
+    subMarkets: normalized.subMarkets,
+    boardSegments: normalized.boardSegments,
+    dateRange: normalized.dateRange,
+    fundamentals: normalized.fundamentals,
+    technicalRules: normalized.technicalRules,
+    calculationMode: normalized.calculationMode,
+    sort: normalized.sort,
+    failOpen: normalized.failOpen,
+  });
+}
+
+function cleanupScreeningCache(now = Date.now()) {
+  for (const [key, entry] of screeningQueryCache.entries()) {
+    if (!entry || (now - Number(entry.createdAt || 0)) > SCREENING_QUERY_CACHE_TTL_MS) {
+      screeningQueryCache.delete(key);
+    }
+  }
+
+  if (screeningQueryCache.size <= SCREENING_QUERY_CACHE_MAX) return;
+  const ordered = Array.from(screeningQueryCache.entries())
+    .sort((a, b) => Number(a?.[1]?.createdAt || 0) - Number(b?.[1]?.createdAt || 0));
+  const overflow = screeningQueryCache.size - SCREENING_QUERY_CACHE_MAX;
+  for (let i = 0; i < overflow; i += 1) {
+    screeningQueryCache.delete(ordered[i][0]);
+  }
+}
+
+function getCachedScreeningResult(cacheKey = '', now = Date.now()) {
+  if (!cacheKey) return null;
+  const entry = screeningQueryCache.get(cacheKey);
+  if (!entry) return null;
+  if ((now - Number(entry.createdAt || 0)) > SCREENING_QUERY_CACHE_TTL_MS) {
+    screeningQueryCache.delete(cacheKey);
+    return null;
+  }
+  return entry;
+}
+
 export const stockScreeningService = {
   query(payload = {}) {
     const normalized = normalizeQueryPayload(payload);
     const mode = normalized.calculationMode;
+    const now = Date.now();
+    const cacheKey = buildQueryCacheKey(normalized);
+    cleanupScreeningCache(now);
+    const cached = getCachedScreeningResult(cacheKey, now);
+    if (cached) {
+      const start = (normalized.page - 1) * normalized.limit;
+      const items = cached.sorted.slice(start, start + normalized.limit);
+      return {
+        page: normalized.page,
+        limit: normalized.limit,
+        total: cached.total,
+        dataAsOf: cached.dataAsOf,
+        items,
+        warning: cached.warning,
+        failOpen: normalized.failOpen,
+        applied: {
+          market: normalized.market,
+          subMarkets: normalized.subMarkets,
+          boardSegments: normalized.boardSegments,
+          dateRange: normalized.dateRange,
+          calculationMode: normalized.calculationMode,
+          fundamentals: normalized.fundamentals,
+          technicalRules: normalized.technicalRules.map((item) => item.expression),
+          sort: normalized.sort,
+        },
+      };
+    }
+
     const warnings = [];
 
     const maxLookbackFromRules = normalized.technicalRules.reduce((acc, rule) => {
@@ -801,7 +873,7 @@ export const stockScreeningService = {
       timeframe: '1d',
     }) || normalized.dateRange.endDate;
 
-    return {
+    const response = {
       page: normalized.page,
       limit: normalized.limit,
       total,
@@ -820,6 +892,15 @@ export const stockScreeningService = {
         sort: normalized.sort,
       },
     };
+    screeningQueryCache.set(cacheKey, {
+      createdAt: now,
+      total,
+      dataAsOf,
+      warning: warnings.length ? warnings.join(' | ') : null,
+      sorted,
+    });
+    cleanupScreeningCache(now);
+    return response;
   },
 
   async addToMonitor(payload = {}) {
