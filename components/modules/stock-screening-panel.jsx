@@ -18,7 +18,12 @@ const BOARD_SEGMENT_OPTIONS = [
   { value: 'STAR', label: '科创板 (STAR)' },
 ];
 
-const FIELD_OPTIONS = [
+const CALCULATION_MODE_OPTIONS = [
+  { value: 'range', label: '区间口径 (range)' },
+  { value: 'latest', label: '末日口径 (latest)' },
+];
+
+const LATEST_FIELD_OPTIONS = [
   { value: 'close', label: '收盘价 (close)' },
   { value: 'open', label: '开盘价 (open)' },
   { value: 'high', label: '最高价 (high)' },
@@ -26,6 +31,28 @@ const FIELD_OPTIONS = [
   { value: 'pctChg', label: '涨跌幅 (pctChg)' },
   { value: 'vol', label: '成交量 (vol)' },
   { value: 'amount', label: '成交额 (amount)' },
+];
+
+const RANGE_FIELD_OPTIONS = [
+  { value: 'close', label: '区间结束收盘 (close)' },
+  { value: 'open', label: '区间起始开盘 (open)' },
+  { value: 'preClose', label: '区间起始昨收 (preClose)' },
+  { value: 'high', label: '区间最高价 (high)' },
+  { value: 'low', label: '区间最低价 (low)' },
+  { value: 'pctChg', label: '区间涨跌幅 (pctChg)' },
+  { value: 'change', label: '区间涨跌额 (change)' },
+  { value: 'vol', label: '区间总成交量 (vol)' },
+  { value: 'amount', label: '区间总成交额 (amount)' },
+  { value: 'rangeStartPreClose', label: '区间起始昨收 (rangeStartPreClose)' },
+  { value: 'rangeStartOpen', label: '区间起始开盘 (rangeStartOpen)' },
+  { value: 'rangeStartClose', label: '区间起始收盘 (rangeStartClose)' },
+  { value: 'rangeEndOpen', label: '区间结束开盘 (rangeEndOpen)' },
+  { value: 'rangeEndClose', label: '区间结束收盘 (rangeEndClose)' },
+  { value: 'rangeEndHigh', label: '区间结束最高 (rangeEndHigh)' },
+  { value: 'rangeEndLow', label: '区间结束最低 (rangeEndLow)' },
+  { value: 'rangeChange', label: '区间涨跌额 (rangeChange)' },
+  { value: 'rangeTotalVol', label: '区间总成交量 (rangeTotalVol)' },
+  { value: 'rangeTotalAmount', label: '区间总成交额 (rangeTotalAmount)' },
 ];
 
 const INDICATOR_OPTIONS = [
@@ -41,6 +68,9 @@ const METRIC_OPTIONS = [
   { value: 'rangeMaxClose', label: '区间最高收盘价 (rangeMaxClose)' },
   { value: 'rangeMinClose', label: '区间最低收盘价 (rangeMinClose)' },
   { value: 'rangePctChg', label: '区间涨跌幅 (rangePctChg)' },
+  { value: 'rangeAmp', label: '区间振幅 (rangeAmp)' },
+  { value: 'upDayRatio', label: '区间阳线占比 (upDayRatio)' },
+  { value: 'maxDrawdown', label: '区间最大回撤 (maxDrawdown)' },
 ];
 
 const OPERATOR_OPTIONS = ['>', '>=', '<', '<=', '==', '!='];
@@ -48,11 +78,20 @@ const OPERATOR_OPTIONS = ['>', '>=', '<', '<=', '==', '!='];
 const SORT_FIELD_OPTIONS = [
   { value: 'pctChgN', label: '20日涨跌幅 (pctChgN20)' },
   { value: 'close', label: '收盘价 (close)' },
+  { value: 'open', label: '开盘价 (open)' },
+  { value: 'pctChg', label: '涨跌幅 (pctChg)' },
   { value: 'ma20', label: '20日均线 (ma20)' },
   { value: 'rangeAvgClose', label: '区间均价 (rangeAvgClose)' },
   { value: 'rangeMaxClose', label: '区间最高收盘价 (rangeMaxClose)' },
   { value: 'rangeMinClose', label: '区间最低收盘价 (rangeMinClose)' },
   { value: 'rangePctChg', label: '区间涨跌幅 (rangePctChg)' },
+  { value: 'rangeAmp', label: '区间振幅 (rangeAmp)' },
+  { value: 'upDayRatio', label: '区间阳线占比 (upDayRatio)' },
+  { value: 'maxDrawdown', label: '区间最大回撤 (maxDrawdown)' },
+  { value: 'rangeStartPreClose', label: '区间起始昨收 (rangeStartPreClose)' },
+  { value: 'rangeStartOpen', label: '区间起始开盘 (rangeStartOpen)' },
+  { value: 'rangeEndOpen', label: '区间结束开盘 (rangeEndOpen)' },
+  { value: 'rangeEndClose', label: '区间结束收盘 (rangeEndClose)' },
   { value: 'totalMarketCap', label: '总市值 (totalMarketCap)' },
   { value: 'code', label: '代码 (code)' },
   { value: 'name', label: '名称 (name)' },
@@ -63,6 +102,8 @@ const FIELD_LABEL_MAP = {
   open: '开盘价',
   high: '最高价',
   low: '最低价',
+  preClose: '昨收价',
+  change: '涨跌额',
   pctChg: '涨跌幅',
   vol: '成交量',
   amount: '成交额',
@@ -75,6 +116,19 @@ const FIELD_LABEL_MAP = {
   rangeMaxClose: '区间最高收盘价',
   rangeMinClose: '区间最低收盘价',
   rangePctChg: '区间涨跌幅',
+  rangeAmp: '区间振幅',
+  upDayRatio: '区间阳线占比',
+  maxDrawdown: '区间最大回撤',
+  rangeStartPreClose: '区间起始昨收',
+  rangeStartOpen: '区间起始开盘',
+  rangeStartClose: '区间起始收盘',
+  rangeEndOpen: '区间结束开盘',
+  rangeEndHigh: '区间结束最高',
+  rangeEndLow: '区间结束最低',
+  rangeEndClose: '区间结束收盘',
+  rangeChange: '区间涨跌额',
+  rangeTotalVol: '区间总成交量',
+  rangeTotalAmount: '区间总成交额',
   totalMarketCap: '总市值',
   code: '代码',
   name: '名称',
@@ -140,12 +194,30 @@ function formatHitRuleText(ruleText = '') {
   const raw = String(ruleText || '').trim();
   if (!raw) return '--';
   return raw.replace(
-    /\bpctChgN\((\d+)\)|\b(rangeAvgClose|rangeMaxClose|rangeMinClose|rangePctChg|ma5|ma10|ma20|ma60|close|open|high|low|pctChg|vol|amount)\b/g,
+    /\bpctChgN\((\d+)\)|\b(rangeAvgClose|rangeMaxClose|rangeMinClose|rangePctChg|rangeAmp|upDayRatio|maxDrawdown|rangeStartPreClose|rangeStartOpen|rangeStartClose|rangeEndOpen|rangeEndHigh|rangeEndLow|rangeEndClose|rangeChange|rangeTotalVol|rangeTotalAmount|ma5|ma10|ma20|ma60|close|open|high|low|preClose|change|pctChg|vol|amount)\b/g,
     (matched, days, token) => {
       if (days) return `N日涨跌幅(${days})`;
       return FIELD_LABEL_MAP[token] || matched;
     },
   );
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  if (!/[,"\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadFile(filename, text, mimeType) {
+  const blob = new Blob([text], { type: mimeType || 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function createRuleDraft() {
@@ -248,7 +320,7 @@ function MultiCheck({ title, options, values, onChange }) {
   );
 }
 
-function RuleOperandEditor({ rule, side = 'left', onChange }) {
+function RuleOperandEditor({ rule, side = 'left', onChange, fieldOptions = LATEST_FIELD_OPTIONS }) {
   const typeKey = side === 'left' ? 'leftType' : 'rightType';
   const nameKey = side === 'left' ? 'leftName' : 'rightName';
   const metricDaysKey = side === 'left' ? 'leftMetricDays' : 'rightMetricDays';
@@ -258,7 +330,7 @@ function RuleOperandEditor({ rule, side = 'left', onChange }) {
   const operandName = rule[nameKey];
 
   const options = operandType === 'field'
-    ? FIELD_OPTIONS
+    ? fieldOptions
     : (operandType === 'indicator' ? INDICATOR_OPTIONS : METRIC_OPTIONS);
 
   return (
@@ -269,7 +341,7 @@ function RuleOperandEditor({ rule, side = 'left', onChange }) {
         onChange={(e) => {
           const nextType = e.target.value;
           const fallbackName = nextType === 'field'
-            ? 'close'
+            ? (fieldOptions[0]?.value || 'close')
             : (nextType === 'indicator' ? 'ma20' : (nextType === 'metric' ? 'pctChgN' : ''));
           onChange((prev) => ({
             ...prev,
@@ -327,6 +399,7 @@ export function StockScreeningPanel() {
   const [bluechipPools, setBluechipPools] = useState([]);
 
   const [form, setForm] = useState({
+    calculationMode: 'range',
     subMarkets: ['SH', 'SZ'],
     boardSegments: ['MAIN', 'GEM', 'STAR'],
     startDate: oneMonthAgo,
@@ -355,10 +428,17 @@ export function StockScreeningPanel() {
   const [selectedCodes, setSelectedCodes] = useState([]);
   const [actionBusy, setActionBusy] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
+  const [exportingAll, setExportingAll] = useState(false);
+  const [monitorDialogOpen, setMonitorDialogOpen] = useState(false);
+  const [poolDialogOpen, setPoolDialogOpen] = useState(false);
   const [allResultSelected, setAllResultSelected] = useState(false);
   const [creatingPool, setCreatingPool] = useState(false);
   const [newPoolName, setNewPoolName] = useState('');
   const [showPoolCreate, setShowPoolCreate] = useState(false);
+
+  const activeFieldOptions = useMemo(() => (
+    form.calculationMode === 'latest' ? LATEST_FIELD_OPTIONS : RANGE_FIELD_OPTIONS
+  ), [form.calculationMode]);
 
   useEffect(() => {
     async function loadDependencies() {
@@ -392,6 +472,17 @@ export function StockScreeningPanel() {
     return currentCodes.every((code) => selectedCodes.includes(code));
   }, [queryState.items, selectedCodes]);
 
+  useEffect(() => {
+    const available = new Set(activeFieldOptions.map((item) => item.value));
+    const fallbackField = activeFieldOptions[0]?.value || 'close';
+    setRules((prev) => prev.map((rule) => {
+      const next = { ...rule };
+      if (next.leftType === 'field' && !available.has(next.leftName)) next.leftName = fallbackField;
+      if (next.rightType === 'field' && !available.has(next.rightName)) next.rightName = fallbackField;
+      return next;
+    }));
+  }, [activeFieldOptions]);
+
   function updateRule(ruleId, updater) {
     setRules((prev) => prev.map((item) => {
       if (item.id !== ruleId) return item;
@@ -409,6 +500,7 @@ export function StockScreeningPanel() {
 
     return {
       market: 'A',
+      calculationMode: form.calculationMode,
       subMarkets: form.subMarkets,
       boardSegments: form.boardSegments,
       dateRange: {
@@ -489,11 +581,11 @@ export function StockScreeningPanel() {
     const categoryId = Number(form.monitorCategoryId);
     if (!Number.isFinite(categoryId) || categoryId <= 0) {
       setMessage('请选择监控分类');
-      return;
+      return false;
     }
     if (!selectedCodes.length) {
       setMessage('请先勾选结果中的股票');
-      return;
+      return false;
     }
 
     setActionBusy(true);
@@ -514,8 +606,10 @@ export function StockScreeningPanel() {
         failed += Number(res?.failed || 0);
       }
       setMessage(`加入监控完成：成功 ${success}，跳过 ${skipped}，失败 ${failed}`);
+      return true;
     } catch (error) {
       setMessage(`加入监控失败：${error.message || '未知错误'}`);
+      return false;
     } finally {
       setActionBusy(false);
     }
@@ -525,11 +619,11 @@ export function StockScreeningPanel() {
     const poolId = Number(form.bluechipPoolId);
     if (!Number.isFinite(poolId) || poolId <= 0) {
       setMessage('请选择标的池');
-      return;
+      return false;
     }
     if (!selectedCodes.length) {
       setMessage('请先勾选结果中的股票');
-      return;
+      return false;
     }
 
     setActionBusy(true);
@@ -550,8 +644,10 @@ export function StockScreeningPanel() {
         failed += Number(res?.failed || 0);
       }
       setMessage(`加入标的池完成：成功 ${success}，跳过 ${skipped}，失败 ${failed}`);
+      return true;
     } catch (error) {
       setMessage(`加入标的池失败：${error.message || '未知错误'}`);
+      return false;
     } finally {
       setActionBusy(false);
     }
@@ -633,6 +729,74 @@ export function StockScreeningPanel() {
     }
   }
 
+  async function exportAllResultsCsv() {
+    if (!queryState.total) {
+      setMessage('暂无结果可导出，请先执行筛选');
+      return;
+    }
+
+    const headers = [
+      '代码(code)',
+      '名称(name)',
+      '子市场(subMarket)',
+      '板块(boardSegment)',
+      '交易日(tradeDay)',
+      '开盘价(startOpen)',
+      '收盘价(close)',
+      '20日均线(ma20)',
+      '20日涨跌幅(pctChgN20)',
+      '区间涨跌幅(rangePctChg)',
+      '区间均价(rangeAvgClose)',
+      '命中条件(hitRules)',
+    ];
+    setExportingAll(true);
+    setMessage('');
+    try {
+      const basePayload = buildQueryPayload(1);
+      const pageSize = 200;
+      const totalPages = Math.max(1, Math.ceil(Number(queryState.total || 0) / pageSize));
+      const rows = [];
+
+      for (let page = 1; page <= totalPages; page += 1) {
+        const res = await clientApi.stockScreening.query({
+          ...basePayload,
+          page,
+          limit: pageSize,
+        });
+        rows.push(...(Array.isArray(res?.items) ? res.items : []));
+      }
+
+      const lines = [headers.join(',')];
+      rows.forEach((item) => {
+        const values = [
+          item?.code || '',
+          item?.name || '',
+          item?.subMarket || '',
+          item?.boardSegment || '',
+          item?.tradeDay || '',
+          Number.isFinite(Number(item?.startOpen)) ? Number(item.startOpen) : '',
+          Number.isFinite(Number(item?.close)) ? Number(item.close) : '',
+          Number.isFinite(Number(item?.ma20)) ? Number(item.ma20) : '',
+          Number.isFinite(Number(item?.pctChgN20)) ? Number(item.pctChgN20) : '',
+          Number.isFinite(Number(item?.rangePctChg)) ? Number(item.rangePctChg) : '',
+          Number.isFinite(Number(item?.rangeAvgClose)) ? Number(item.rangeAvgClose) : '',
+          Array.isArray(item?.hitRules) ? item.hitRules.map((ruleText) => formatHitRuleText(ruleText)).join(' | ') : '',
+        ];
+        lines.push(values.map(csvEscape).join(','));
+      });
+
+      const safeStart = String(form.startDate || '').replaceAll('-', '');
+      const safeEnd = String(form.endDate || '').replaceAll('-', '');
+      const filename = `stock_screening_${safeStart}_${safeEnd}_all.csv`;
+      downloadFile(filename, `\uFEFF${lines.join('\n')}`, 'text/csv;charset=utf-8');
+      setMessage(`已导出全部结果：${rows.length} 条`);
+    } catch (error) {
+      setMessage(`导出失败：${error.message || '未知错误'}`);
+    } finally {
+      setExportingAll(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(queryState.total / toPositiveInt(form.limit, 50)));
 
   return (
@@ -660,6 +824,15 @@ export function StockScreeningPanel() {
 
           <div className="rounded-md border border-border/60 p-3">
             <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="h-9 w-48 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm"
+                value={form.calculationMode}
+                onChange={(e) => setForm((prev) => ({ ...prev, calculationMode: e.target.value }))}
+              >
+                {CALCULATION_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
               <Input
                 className="w-40 shrink-0"
                 type="date"
@@ -747,6 +920,7 @@ export function StockScreeningPanel() {
                     <RuleOperandEditor
                       rule={rule}
                       side="left"
+                      fieldOptions={activeFieldOptions}
                       onChange={(updater) => updateRule(rule.id, updater)}
                     />
                     <select
@@ -761,6 +935,7 @@ export function StockScreeningPanel() {
                     <RuleOperandEditor
                       rule={rule}
                       side="right"
+                      fieldOptions={activeFieldOptions}
                       onChange={(updater) => updateRule(rule.id, updater)}
                     />
                     <Button
@@ -796,57 +971,39 @@ export function StockScreeningPanel() {
         <CardHeader>
           <CardTitle>筛选结果</CardTitle>
           <CardDescription>
-            数据基准日：{queryState.dataAsOf || '--'} ｜ 当前范围：{makeRangeLabel(form.startDate, form.endDate)} ｜ 命中总数：{queryState.total}
+            数据基准日：{queryState.dataAsOf || '--'} ｜ 当前范围：{makeRangeLabel(form.startDate, form.endDate)} ｜ 计算口径：{form.calculationMode === 'latest' ? '末日口径' : '区间口径'} ｜ 命中总数：{queryState.total}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="overflow-x-auto rounded-md border border-border/60 p-3">
-            <div className="flex min-w-[1000px] items-center gap-2">
-              <select
-                className="h-9 w-56 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm"
-                value={form.monitorCategoryId}
-                onChange={(e) => setForm((prev) => ({ ...prev, monitorCategoryId: e.target.value }))}
-              >
-                <option value="">监控分类</option>
-                {monitorCategories.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </select>
+            <div className="flex min-w-[1000px] flex-wrap items-center gap-2">
               <Button
                 className="w-40 shrink-0"
                 variant="secondary"
                 disabled={actionBusy || !selectedCodes.length}
-                onClick={() => batchAddToMonitor().catch(() => {})}
+                onClick={() => setMonitorDialogOpen(true)}
               >
                 加入监控分类
               </Button>
-
-              <select
-                className="h-9 w-56 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm"
-                value={form.bluechipPoolId}
-                onChange={(e) => setForm((prev) => ({ ...prev, bluechipPoolId: e.target.value }))}
-              >
-                <option value="">标的池</option>
-                {bluechipPools.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name} ({item.code})</option>
-                ))}
-              </select>
-              <Button
-                className="shrink-0"
-                variant="outline"
-                onClick={() => setShowPoolCreate((prev) => !prev)}
-              >
-                {showPoolCreate ? '取消新建' : '新建标的池'}
-              </Button>
               <Button
                 className="w-40 shrink-0"
                 variant="secondary"
                 disabled={actionBusy || !selectedCodes.length}
-                onClick={() => batchAddToBluechipPool().catch(() => {})}
+                onClick={() => {
+                  setShowPoolCreate(false);
+                  setPoolDialogOpen(true);
+                }}
               >
                 加入标的池
               </Button>
-
+              <Button
+                className="w-36 shrink-0"
+                variant="outline"
+                onClick={() => exportAllResultsCsv().catch(() => {})}
+                disabled={!queryState.total || exportingAll}
+              >
+                {exportingAll ? '导出中...' : '导出全部'}
+              </Button>
               <Button
                 className="w-40 shrink-0"
                 variant="outline"
@@ -867,23 +1024,6 @@ export function StockScreeningPanel() {
                 已选 {selectedCodes.length} 只{allResultSelected ? ` / 共 ${queryState.total} 只` : ''}
               </span>
             </div>
-            {showPoolCreate ? (
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Input
-                  className="w-56"
-                  value={newPoolName}
-                  onChange={(e) => setNewPoolName(e.target.value)}
-                  placeholder="新池名称"
-                />
-                <Button
-                  variant="secondary"
-                  disabled={creatingPool}
-                  onClick={() => createBluechipPoolInline().catch(() => {})}
-                >
-                  {creatingPool ? '创建中...' : '确认创建并选中'}
-                </Button>
-              </div>
-            ) : null}
           </div>
 
           <div className="max-h-[560px] overflow-auto rounded-md border border-border/60">
@@ -896,12 +1036,12 @@ export function StockScreeningPanel() {
                   <th className="px-2 py-1 text-left">子市场</th>
                   <th className="px-2 py-1 text-left">板块</th>
                   <th className="px-2 py-1 text-left">交易日</th>
+                  <th className="px-2 py-1 text-left">开盘价 (startOpen)</th>
                   <th className="px-2 py-1 text-left">收盘价 (close)</th>
                   <th className="px-2 py-1 text-left">20日均线 (ma20)</th>
                   <th className="px-2 py-1 text-left">20日涨跌幅 (pctChgN20)</th>
                   <th className="px-2 py-1 text-left">区间涨跌幅 (rangePctChg)</th>
                   <th className="px-2 py-1 text-left">区间均价 (rangeAvgClose)</th>
-                  <th className="px-2 py-1 text-left">总市值</th>
                   <th className="px-2 py-1 text-left">命中条件</th>
                 </tr>
               </thead>
@@ -918,12 +1058,12 @@ export function StockScreeningPanel() {
                       <td className="px-2 py-1">{item.subMarket}</td>
                       <td className="px-2 py-1">{item.boardSegment}</td>
                       <td className="px-2 py-1">{item.tradeDay}</td>
+                      <td className="px-2 py-1">{formatNum(item.startOpen)}</td>
                       <td className="px-2 py-1">{formatNum(item.close)}</td>
                       <td className="px-2 py-1">{formatNum(item.ma20)}</td>
                       <td className="px-2 py-1">{formatNum(item.pctChgN20, 2)}</td>
                       <td className="px-2 py-1">{formatNum(item.rangePctChg, 2)}</td>
                       <td className="px-2 py-1">{formatNum(item.rangeAvgClose)}</td>
-                      <td className="px-2 py-1">{formatNum(item.totalMarketCap, 0)}</td>
                       <td className="px-2 py-1 text-xs text-muted-foreground">
                         {Array.isArray(item.hitRules) ? item.hitRules.map((ruleText) => formatHitRuleText(ruleText)).join(' | ') : '--'}
                       </td>
@@ -960,6 +1100,130 @@ export function StockScreeningPanel() {
           </div>
         </CardContent>
       </Card>
+
+      {monitorDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={() => setMonitorDialogOpen(false)}>
+          <div className="w-[min(92vw,560px)] rounded-lg border border-border bg-background p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3">
+              <h3 className="text-base font-semibold">加入监控分类</h3>
+              <p className="text-sm text-muted-foreground">已选 {selectedCodes.length} 只股票，请选择目标分类。</p>
+            </div>
+            <div className="space-y-3">
+              <select
+                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                value={form.monitorCategoryId}
+                onChange={(e) => setForm((prev) => ({ ...prev, monitorCategoryId: e.target.value }))}
+              >
+                <option value="">监控分类</option>
+                {monitorCategories.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setMonitorDialogOpen(false)} disabled={actionBusy}>取消</Button>
+                <Button
+                  variant="secondary"
+                  disabled={actionBusy || !selectedCodes.length}
+                  onClick={() => {
+                    batchAddToMonitor()
+                      .then((ok) => {
+                        if (ok) setMonitorDialogOpen(false);
+                      })
+                      .catch(() => {});
+                  }}
+                >
+                  {actionBusy ? '处理中...' : '确认加入'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {poolDialogOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+          onClick={() => {
+            setPoolDialogOpen(false);
+            setShowPoolCreate(false);
+          }}
+        >
+          <div className="w-[min(92vw,680px)] rounded-lg border border-border bg-background p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3">
+              <h3 className="text-base font-semibold">加入标的池</h3>
+              <p className="text-sm text-muted-foreground">已选 {selectedCodes.length} 只股票，请选择目标标的池。</p>
+            </div>
+            <div className="space-y-3">
+              <select
+                className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                value={form.bluechipPoolId}
+                onChange={(e) => setForm((prev) => ({ ...prev, bluechipPoolId: e.target.value }))}
+              >
+                <option value="">标的池</option>
+                {bluechipPools.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name} ({item.code})</option>
+                ))}
+              </select>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowPoolCreate((prev) => !prev)}
+                  disabled={creatingPool}
+                >
+                  {showPoolCreate ? '取消新建' : '新建标的池'}
+                </Button>
+                {showPoolCreate ? (
+                  <>
+                    <Input
+                      className="w-56"
+                      value={newPoolName}
+                      onChange={(e) => setNewPoolName(e.target.value)}
+                      placeholder="新池名称"
+                    />
+                    <Button
+                      variant="secondary"
+                      disabled={creatingPool}
+                      onClick={() => createBluechipPoolInline().catch(() => {})}
+                    >
+                      {creatingPool ? '创建中...' : '创建并选中'}
+                    </Button>
+                  </>
+                ) : null}
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setPoolDialogOpen(false);
+                    setShowPoolCreate(false);
+                  }}
+                  disabled={actionBusy || creatingPool}
+                >
+                  取消
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={actionBusy || creatingPool || !selectedCodes.length}
+                  onClick={() => {
+                    batchAddToBluechipPool()
+                      .then((ok) => {
+                        if (ok) {
+                          setPoolDialogOpen(false);
+                          setShowPoolCreate(false);
+                        }
+                      })
+                      .catch(() => {});
+                  }}
+                >
+                  {actionBusy ? '处理中...' : '确认加入'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

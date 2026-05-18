@@ -546,22 +546,22 @@ export function MarketMetricsPanel() {
           <CardDescription>按日期范围计算平均/中位数指标。规则标识留空时，计算全部“已启用”规则。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="overflow-x-auto rounded-md border border-border/60 p-3">
-            <div className="flex min-w-[980px] items-center gap-2">
+          <div className="rounded-md border border-border/60 p-3">
+            <div className="flex flex-wrap items-center gap-2">
               <Input
-                className="w-40 shrink-0"
+                className="w-56 shrink-0 max-sm:w-full"
                 type="date"
                 value={computeForm.startDay}
                 onChange={(e) => setComputeForm((prev) => ({ ...prev, startDay: e.target.value }))}
               />
               <Input
-                className="w-40 shrink-0"
+                className="w-56 shrink-0 max-sm:w-full"
                 type="date"
                 value={computeForm.endDay}
                 onChange={(e) => setComputeForm((prev) => ({ ...prev, endDay: e.target.value }))}
               />
               <select
-                className="h-9 w-64 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm"
+                className="h-9 w-80 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm max-sm:w-full"
                 value={computeForm.ruleKey}
                 onChange={(e) => setComputeForm((prev) => ({ ...prev, ruleKey: e.target.value }))}
               >
@@ -573,14 +573,14 @@ export function MarketMetricsPanel() {
                 ))}
               </select>
               <select
-                className="h-9 w-64 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm"
+                className="h-9 w-80 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm max-sm:w-full"
                 value={computeForm.force}
                 onChange={(e) => setComputeForm((prev) => ({ ...prev, force: e.target.value }))}
               >
                 <option value="false">默认：若已有结果则跳过</option>
                 <option value="true">强制重算：覆盖当日已有结果</option>
               </select>
-              <Button className="w-36 shrink-0" onClick={() => submitCompute().catch(() => {})} disabled={computing}>
+              <Button className="w-32 shrink-0 max-sm:w-auto" onClick={() => submitCompute().catch(() => {})} disabled={computing}>
                 {computing ? '计算中，请稍候...' : '执行计算'}
               </Button>
             </div>
@@ -644,23 +644,23 @@ export function MarketMetricsPanel() {
           <CardDescription>按日期范围查询指标结果。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="overflow-x-auto rounded-md border border-border/60 p-3">
-            <div className="flex min-w-[980px] items-center gap-2">
+          <div className="rounded-md border border-border/60 p-3">
+            <div className="flex flex-wrap items-center gap-2">
               <Input
-                className="w-40 shrink-0"
+                className="w-full min-w-[180px] flex-1 sm:w-40 sm:flex-none"
                 type="date"
                 value={queryForm.startDay}
                 onChange={(e) => setQueryForm((prev) => ({ ...prev, startDay: e.target.value }))}
               />
               <Input
-                className="w-40 shrink-0"
+                className="w-full min-w-[180px] flex-1 sm:w-40 sm:flex-none"
                 type="date"
                 value={queryForm.endDay}
                 onChange={(e) => setQueryForm((prev) => ({ ...prev, endDay: e.target.value }))}
               />
-              <Input className="w-44 shrink-0" value={SCOPE_KEY_LABEL_MAP.ALL_A} readOnly />
+              <Input className="w-full min-w-[180px] flex-1 sm:w-44 sm:flex-none" value={SCOPE_KEY_LABEL_MAP.ALL_A} readOnly />
               <select
-                className="h-9 w-56 shrink-0 rounded-md border border-input bg-transparent px-3 text-sm"
+                className="h-9 w-full min-w-[220px] flex-1 rounded-md border border-input bg-transparent px-3 text-sm sm:w-56 sm:flex-none"
                 value={queryForm.ruleKey}
                 onChange={(e) => setQueryForm((prev) => ({ ...prev, ruleKey: e.target.value }))}
               >
@@ -671,13 +671,13 @@ export function MarketMetricsPanel() {
                 ))}
               </select>
               <Input
-                className="w-44 shrink-0"
+                className="w-full min-w-[180px] flex-1 sm:w-44 sm:flex-none"
                 value={queryForm.limit}
                 onChange={(e) => setQueryForm((prev) => ({ ...prev, limit: e.target.value }))}
                 placeholder="返回条数（例如 200）"
               />
               <Button
-                className="w-36 shrink-0"
+                className="min-w-[112px] w-auto"
                 variant="secondary"
                 onClick={() => queryRange().catch(() => {})}
                 disabled={queryLoading}
@@ -685,7 +685,7 @@ export function MarketMetricsPanel() {
                 查询结果
               </Button>
               <Button
-                className="w-32 shrink-0"
+                className="min-w-[112px] w-auto"
                 variant="outline"
                 onClick={handleShowTrend}
                 disabled={queryLoading || !queryTrendData.length}

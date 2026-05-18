@@ -378,6 +378,8 @@ CREATE TABLE IF NOT EXISTS stock_basics (
   market TEXT NOT NULL,
   -- 子市场标识
   sub_market TEXT,
+  -- 证券类型：stock/index/etf/fund...
+  security_type TEXT NOT NULL DEFAULT 'stock',
   -- 股票代码
   code TEXT NOT NULL,
   -- 股票名称

@@ -7,6 +7,7 @@ function mapBasic(row) {
     id: row.id,
     market: row.market,
     subMarket: row.sub_market,
+    securityType: row.security_type,
     code: row.code,
     name: row.name,
     sector: row.sector,
@@ -36,6 +37,7 @@ function toBasicUpsertParams(row = {}) {
   return {
     market: row.market,
     subMarket: row.subMarket ?? null,
+    securityType: row.securityType ?? 'stock',
     code: row.code,
     name: row.name,
     sector: row.sector ?? null,
@@ -67,14 +69,14 @@ export const stockBasicsRepository = {
     const db = getDb();
     const stmt = db.prepare(`
       INSERT INTO stock_basics (
-        market, sub_market, code, name, sector, industry,
+        market, sub_market, security_type, code, name, sector, industry,
         latest_price, total_shares, float_shares, total_market_cap, float_market_cap,
         listing_date, main_business, business_scope, company_profile, trading_hours,
         fundamentals_source, fundamentals_synced_at,
         source, synced_at, updated_at
       )
       VALUES (
-        @market, @subMarket, @code, @name, @sector, @industry,
+        @market, @subMarket, @securityType, @code, @name, @sector, @industry,
         @latestPrice, @totalShares, @floatShares, @totalMarketCap, @floatMarketCap,
         @listingDate, @mainBusiness, @businessScope, @companyProfile, @tradingHours,
         @fundamentalsSource, @fundamentalsSyncedAt,
@@ -82,6 +84,7 @@ export const stockBasicsRepository = {
       )
       ON CONFLICT(market, code) DO UPDATE SET
         sub_market = excluded.sub_market,
+        security_type = excluded.security_type,
         name = excluded.name,
         sector = excluded.sector,
         industry = COALESCE(excluded.industry, stock_basics.industry),
@@ -113,14 +116,14 @@ export const stockBasicsRepository = {
     const db = getDb();
     db.prepare(`
       INSERT INTO stock_basics (
-        market, sub_market, code, name, sector, industry,
+        market, sub_market, security_type, code, name, sector, industry,
         latest_price, total_shares, float_shares, total_market_cap, float_market_cap,
         listing_date, main_business, business_scope, company_profile, trading_hours,
         fundamentals_source, fundamentals_synced_at,
         source, synced_at, updated_at
       )
       VALUES (
-        @market, @subMarket, @code, @name, @sector, @industry,
+        @market, @subMarket, @securityType, @code, @name, @sector, @industry,
         @latestPrice, @totalShares, @floatShares, @totalMarketCap, @floatMarketCap,
         @listingDate, @mainBusiness, @businessScope, @companyProfile, @tradingHours,
         @fundamentalsSource, @fundamentalsSyncedAt,
@@ -128,6 +131,7 @@ export const stockBasicsRepository = {
       )
       ON CONFLICT(market, code) DO UPDATE SET
         sub_market = COALESCE(excluded.sub_market, stock_basics.sub_market),
+        security_type = COALESCE(excluded.security_type, stock_basics.security_type),
         name = COALESCE(excluded.name, stock_basics.name),
         sector = COALESCE(excluded.sector, stock_basics.sector),
         industry = COALESCE(excluded.industry, stock_basics.industry),

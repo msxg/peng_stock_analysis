@@ -8,10 +8,40 @@ import { bluechipPoolRepository } from '../repositories/bluechipPoolRepository.j
 const SUPPORTED_MARKET = 'A';
 const DEFAULT_SUB_MARKETS = ['SH', 'SZ', 'BJ'];
 const DEFAULT_BOARD_SEGMENTS = ['MAIN', 'GEM', 'STAR'];
+const CALCULATION_MODES = new Set(['range', 'latest']);
 const OPERATORS = new Set(['>', '>=', '<', '<=', '==', '!=']);
-const FIELD_NAMES = new Set(['open', 'high', 'low', 'close', 'preClose', 'change', 'pctChg', 'vol', 'amount']);
+const FIELD_NAMES = new Set([
+  'open',
+  'high',
+  'low',
+  'close',
+  'preClose',
+  'change',
+  'pctChg',
+  'vol',
+  'amount',
+  'rangeStartOpen',
+  'rangeStartClose',
+  'rangeStartPreClose',
+  'rangeEndOpen',
+  'rangeEndHigh',
+  'rangeEndLow',
+  'rangeEndClose',
+  'rangeChange',
+  'rangeTotalVol',
+  'rangeTotalAmount',
+]);
 const INDICATOR_NAMES = new Set(['ma5', 'ma10', 'ma20', 'ma60']);
-const METRIC_NAMES = new Set(['pctChgN', 'rangeAvgClose', 'rangeMaxClose', 'rangeMinClose', 'rangePctChg']);
+const METRIC_NAMES = new Set([
+  'pctChgN',
+  'rangeAvgClose',
+  'rangeMaxClose',
+  'rangeMinClose',
+  'rangePctChg',
+  'rangeAmp',
+  'upDayRatio',
+  'maxDrawdown',
+]);
 const SORT_ORDERS = new Set(['asc', 'desc']);
 
 function isDateText(value) {
@@ -249,30 +279,125 @@ function calcPctChgN(bars = [], endIndex = -1, days = 20) {
 }
 
 function calcRangeStats(rangeBars = []) {
-  const closes = (Array.isArray(rangeBars) ? rangeBars : [])
-    .map((item) => toNumberOrNull(item?.close))
-    .filter((item) => item !== null);
-
-  if (!closes.length) {
+  const bars = Array.isArray(rangeBars) ? rangeBars : [];
+  if (!bars.length) {
     return {
+      rangeStartOpen: null,
+      rangeStartClose: null,
+      rangeStartPreClose: null,
+      rangeEndOpen: null,
+      rangeEndHigh: null,
+      rangeEndLow: null,
+      rangeEndClose: null,
+      rangeChange: null,
       rangeAvgClose: null,
       rangeMaxClose: null,
       rangeMinClose: null,
       rangePctChg: null,
+      rangeMaxHigh: null,
+      rangeMinLow: null,
+      rangeAmp: null,
+      upDayRatio: null,
+      maxDrawdown: null,
+      rangeTotalVol: null,
+      rangeTotalAmount: null,
     };
   }
 
+  const firstBar = bars[0];
+  const lastBar = bars[bars.length - 1];
+  const firstOpen = toNumberOrNull(firstBar?.open);
+  const firstClose = toNumberOrNull(firstBar?.close);
+  const firstPreClose = toNumberOrNull(firstBar?.preClose);
+  const lastOpen = toNumberOrNull(lastBar?.open);
+  const lastHigh = toNumberOrNull(lastBar?.high);
+  const lastLow = toNumberOrNull(lastBar?.low);
+  const lastClose = toNumberOrNull(lastBar?.close);
+
+  const closes = bars
+    .map((item) => toNumberOrNull(item?.close))
+    .filter((item) => item !== null);
+  const highs = bars
+    .map((item) => toNumberOrNull(item?.high))
+    .filter((item) => item !== null);
+  const lows = bars
+    .map((item) => toNumberOrNull(item?.low))
+    .filter((item) => item !== null);
+  const vols = bars
+    .map((item) => toNumberOrNull(item?.vol))
+    .filter((item) => item !== null);
+  const amounts = bars
+    .map((item) => toNumberOrNull(item?.amount))
+    .filter((item) => item !== null);
+
+  const validDailyDirection = bars.reduce((acc, bar) => {
+    const o = toNumberOrNull(bar?.open);
+    const c = toNumberOrNull(bar?.close);
+    if (o === null || c === null) return acc;
+    return {
+      total: acc.total + 1,
+      up: acc.up + (c > o ? 1 : 0),
+    };
+  }, { total: 0, up: 0 });
+
   const sum = closes.reduce((acc, cur) => acc + cur, 0);
-  const firstClose = closes[0];
-  const lastClose = closes[closes.length - 1];
-  const rangePctChg = firstClose > 0
-    ? Number((((lastClose - firstClose) / firstClose) * 100).toFixed(6))
+  const maxHigh = highs.length ? Math.max(...highs) : null;
+  const minLow = lows.length ? Math.min(...lows) : null;
+  const upDayRatio = validDailyDirection.total > 0
+    ? Number((validDailyDirection.up / validDailyDirection.total).toFixed(6))
     : null;
+  const rangeChange = lastClose !== null && firstPreClose !== null
+    ? Number((lastClose - firstPreClose).toFixed(6))
+    : null;
+  const rangePctChg = firstPreClose > 0
+    ? Number((((lastClose - firstPreClose) / firstPreClose) * 100).toFixed(6))
+    : null;
+
+  const rangeAmp = firstPreClose > 0 && maxHigh !== null && minLow !== null
+    ? Number((((maxHigh - minLow) / firstPreClose) * 100).toFixed(6))
+    : null;
+
+  let maxDrawdown = null;
+  const drawdownBase = [];
+  if (firstPreClose !== null) drawdownBase.push(firstPreClose);
+  drawdownBase.push(...closes);
+  if (drawdownBase.length) {
+    let peak = null;
+    let maxDd = 0;
+    drawdownBase.forEach((price) => {
+      const p = toNumberOrNull(price);
+      if (p === null || p <= 0) return;
+      if (peak === null || p > peak) peak = p;
+      if (peak > 0) {
+        const dd = ((peak - p) / peak) * 100;
+        if (dd > maxDd) maxDd = dd;
+      }
+    });
+    if (peak !== null) {
+      maxDrawdown = Number(maxDd.toFixed(6));
+    }
+  }
+
   return {
+    rangeStartOpen: firstOpen,
+    rangeStartClose: firstClose,
+    rangeStartPreClose: firstPreClose,
+    rangeEndOpen: lastOpen,
+    rangeEndHigh: lastHigh,
+    rangeEndLow: lastLow,
+    rangeEndClose: lastClose,
+    rangeChange,
     rangeAvgClose: Number((sum / closes.length).toFixed(6)),
     rangeMaxClose: Number(Math.max(...closes).toFixed(6)),
     rangeMinClose: Number(Math.min(...closes).toFixed(6)),
     rangePctChg,
+    rangeMaxHigh: maxHigh !== null ? Number(maxHigh.toFixed(6)) : null,
+    rangeMinLow: minLow !== null ? Number(minLow.toFixed(6)) : null,
+    rangeAmp,
+    upDayRatio,
+    maxDrawdown,
+    rangeTotalVol: vols.length ? Number(vols.reduce((acc, cur) => acc + cur, 0).toFixed(6)) : null,
+    rangeTotalAmount: amounts.length ? Number(amounts.reduce((acc, cur) => acc + cur, 0).toFixed(6)) : null,
   };
 }
 
@@ -280,12 +405,26 @@ function resolveOperandValue(operand = {}, ctx = {}) {
   const latest = ctx?.latestBar || null;
   const bars = Array.isArray(ctx?.bars) ? ctx.bars : [];
   const endIndex = Number.isFinite(ctx?.endIndex) ? ctx.endIndex : bars.length - 1;
+  const mode = String(ctx?.calculationMode || 'range');
+  const rangeStats = ctx?.rangeStats || {};
 
   if (operand.type === 'const') {
     return toNumberOrNull(operand.value);
   }
 
   if (operand.type === 'field') {
+    if (mode === 'range') {
+      if (operand.name === 'open') return toNumberOrNull(rangeStats.rangeStartOpen);
+      if (operand.name === 'high') return toNumberOrNull(rangeStats.rangeMaxHigh);
+      if (operand.name === 'low') return toNumberOrNull(rangeStats.rangeMinLow);
+      if (operand.name === 'close') return toNumberOrNull(rangeStats.rangeEndClose);
+      if (operand.name === 'preClose') return toNumberOrNull(rangeStats.rangeStartPreClose);
+      if (operand.name === 'change') return toNumberOrNull(rangeStats.rangeChange);
+      if (operand.name === 'pctChg') return toNumberOrNull(rangeStats.rangePctChg);
+      if (operand.name === 'vol') return toNumberOrNull(rangeStats.rangeTotalVol);
+      if (operand.name === 'amount') return toNumberOrNull(rangeStats.rangeTotalAmount);
+      return toNumberOrNull(rangeStats?.[operand.name]);
+    }
     return toNumberOrNull(latest?.[operand.name]);
   }
 
@@ -305,6 +444,9 @@ function resolveOperandValue(operand = {}, ctx = {}) {
     if (operand.name === 'rangeMaxClose') return toNumberOrNull(ctx?.rangeStats?.rangeMaxClose);
     if (operand.name === 'rangeMinClose') return toNumberOrNull(ctx?.rangeStats?.rangeMinClose);
     if (operand.name === 'rangePctChg') return toNumberOrNull(ctx?.rangeStats?.rangePctChg);
+    if (operand.name === 'rangeAmp') return toNumberOrNull(ctx?.rangeStats?.rangeAmp);
+    if (operand.name === 'upDayRatio') return toNumberOrNull(ctx?.rangeStats?.upDayRatio);
+    if (operand.name === 'maxDrawdown') return toNumberOrNull(ctx?.rangeStats?.maxDrawdown);
     return null;
   }
 
@@ -367,6 +509,7 @@ function normalizeQueryPayload(payload = {}) {
 
   const fundamentals = payload?.fundamentals || {};
   const technicalRules = normalizeTechnicalRules(payload?.technicalRules || []);
+  const mode = String(payload?.calculationMode || 'range').trim().toLowerCase();
 
   const sortField = String(payload?.sort?.field || 'pctChgN').trim();
   const sortOrder = String(payload?.sort?.order || 'desc').trim().toLowerCase();
@@ -385,6 +528,7 @@ function normalizeQueryPayload(payload = {}) {
       listingDaysMin: toNonNegativeInt(fundamentals.listingDaysMin, 0),
     },
     technicalRules,
+    calculationMode: CALCULATION_MODES.has(mode) ? mode : 'range',
     sort: {
       field: sortField,
       order: SORT_ORDERS.has(sortOrder) ? sortOrder : 'desc',
@@ -456,6 +600,7 @@ function sortByField(items = [], field = 'pctChgN', order = 'desc') {
 export const stockScreeningService = {
   query(payload = {}) {
     const normalized = normalizeQueryPayload(payload);
+    const mode = normalized.calculationMode;
     const warnings = [];
 
     const maxLookbackFromRules = normalized.technicalRules.reduce((acc, rule) => {
@@ -499,9 +644,9 @@ export const stockScreeningService = {
       });
     }
 
-    if (candidates.length > 5000) {
-      warnings.push(`候选样本过大(${candidates.length})，已按代码截断至 5000 只`);
-      candidates = candidates.slice(0, 5000);
+    if (candidates.length > 8000) {
+      warnings.push(`候选样本过大(${candidates.length})，已按代码截断至 8000 只`);
+      candidates = candidates.slice(0, 8000);
     }
 
     const codes = candidates.map((item) => String(item.code || '').trim()).filter(Boolean);
@@ -540,6 +685,7 @@ export const stockScreeningService = {
         return;
       }
 
+      const firstBar = rangeBars[0];
       const latestBar = rangeBars[rangeBars.length - 1];
       const endIndex = allBars.findIndex((bar) => bar.tradeDay === latestBar.tradeDay);
       if (endIndex < 0) {
@@ -554,6 +700,7 @@ export const stockScreeningService = {
         latestBar,
         endIndex,
         rangeStats,
+        calculationMode: normalized.calculationMode,
       };
 
       const evaluations = normalized.technicalRules.map((rule) => evaluateRule(rule, ctx));
@@ -573,6 +720,13 @@ export const stockScreeningService = {
       const ma20 = calcSimpleMa(allBars, endIndex, 20);
       const ma60 = calcSimpleMa(allBars, endIndex, 60);
       const pctChg20 = calcPctChgN(allBars, endIndex, 20);
+      const sortOpen = mode === 'latest' ? toNumberOrNull(latestBar.open) : rangeStats.rangeStartOpen;
+      const sortClose = mode === 'latest' ? toNumberOrNull(latestBar.close) : rangeStats.rangeEndClose;
+      const sortPreClose = mode === 'latest' ? toNumberOrNull(latestBar.preClose) : rangeStats.rangeStartPreClose;
+      const sortChange = mode === 'latest' ? toNumberOrNull(latestBar.change) : rangeStats.rangeChange;
+      const sortPctChg = mode === 'latest' ? toNumberOrNull(latestBar.pctChg) : rangeStats.rangePctChg;
+      const sortVol = mode === 'latest' ? toNumberOrNull(latestBar.vol) : rangeStats.rangeTotalVol;
+      const sortAmount = mode === 'latest' ? toNumberOrNull(latestBar.amount) : rangeStats.rangeTotalAmount;
 
       resultItems.push({
         code,
@@ -581,6 +735,7 @@ export const stockScreeningService = {
         subMarket: String(candidate.subMarket || '').toUpperCase() || '--',
         boardSegment: normalizeBoardSegmentByCode(candidate),
         tradeDay: latestBar.tradeDay,
+        startOpen: toNumberOrNull(firstBar?.open),
         close: toNumberOrNull(latestBar.close),
         totalMarketCap: toNumberOrNull(candidate.totalMarketCap),
         listingDate: candidate.listingDate,
@@ -597,7 +752,23 @@ export const stockScreeningService = {
         sortValues: {
           code,
           name: candidate.name,
-          close: toNumberOrNull(latestBar.close),
+          open: sortOpen,
+          close: sortClose,
+          preClose: sortPreClose,
+          change: sortChange,
+          pctChg: sortPctChg,
+          vol: sortVol,
+          amount: sortAmount,
+          rangeStartOpen: rangeStats.rangeStartOpen,
+          rangeStartClose: rangeStats.rangeStartClose,
+          rangeStartPreClose: rangeStats.rangeStartPreClose,
+          rangeEndOpen: rangeStats.rangeEndOpen,
+          rangeEndHigh: rangeStats.rangeEndHigh,
+          rangeEndLow: rangeStats.rangeEndLow,
+          rangeEndClose: rangeStats.rangeEndClose,
+          rangeChange: rangeStats.rangeChange,
+          rangeTotalVol: rangeStats.rangeTotalVol,
+          rangeTotalAmount: rangeStats.rangeTotalAmount,
           pctChgN: pctChg20,
           ma5,
           ma10,
@@ -607,6 +778,9 @@ export const stockScreeningService = {
           rangeMaxClose: rangeStats.rangeMaxClose,
           rangeMinClose: rangeStats.rangeMinClose,
           rangePctChg: rangeStats.rangePctChg,
+          rangeAmp: rangeStats.rangeAmp,
+          upDayRatio: rangeStats.upDayRatio,
+          maxDrawdown: rangeStats.maxDrawdown,
           totalMarketCap: toNumberOrNull(candidate.totalMarketCap),
         },
       });
@@ -640,6 +814,7 @@ export const stockScreeningService = {
         subMarkets: normalized.subMarkets,
         boardSegments: normalized.boardSegments,
         dateRange: normalized.dateRange,
+        calculationMode: normalized.calculationMode,
         fundamentals: normalized.fundamentals,
         technicalRules: normalized.technicalRules.map((item) => item.expression),
         sort: normalized.sort,

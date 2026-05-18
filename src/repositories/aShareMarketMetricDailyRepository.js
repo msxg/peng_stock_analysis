@@ -165,6 +165,12 @@ export const aShareMarketMetricDailyRepository = {
           b.vol,
           b.amount,
           CASE
+            WHEN b.stock_code GLOB 'SH[0-9][0-9][0-9][0-9][0-9][0-9]' THEN 'SH'
+            WHEN b.stock_code GLOB 'SZ[0-9][0-9][0-9][0-9][0-9][0-9]' THEN 'SZ'
+            WHEN b.stock_code GLOB 'BJ[0-9][0-9][0-9][0-9][0-9][0-9]' THEN 'BJ'
+            ELSE ''
+          END AS sub_market_key,
+          CASE
             WHEN b.stock_code GLOB 'SH[0-9][0-9][0-9][0-9][0-9][0-9]' THEN SUBSTR(b.stock_code, 3)
             WHEN b.stock_code GLOB 'SZ[0-9][0-9][0-9][0-9][0-9][0-9]' THEN SUBSTR(b.stock_code, 3)
             WHEN b.stock_code GLOB 'BJ[0-9][0-9][0-9][0-9][0-9][0-9]' THEN SUBSTR(b.stock_code, 3)
@@ -185,15 +191,14 @@ export const aShareMarketMetricDailyRepository = {
         COALESCE(sb.name, '') AS stockName,
         sb.listing_date AS listingDate
       FROM day_rows d
-      LEFT JOIN stock_basics sb
-        ON sb.market = 'A' AND sb.code = d.code_key
-      WHERE (
-        sb.market = 'A'
-        OR d.stock_code GLOB 'SH[0-9][0-9][0-9][0-9][0-9][0-9]'
-        OR d.stock_code GLOB 'SZ[0-9][0-9][0-9][0-9][0-9][0-9]'
-        OR d.stock_code GLOB 'BJ[0-9][0-9][0-9][0-9][0-9][0-9]'
-        OR d.stock_code GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'
-      )
+      INNER JOIN stock_basics sb
+        ON sb.market = 'A'
+       AND sb.security_type = 'stock'
+       AND sb.code = d.code_key
+       AND (
+         d.sub_market_key = ''
+         OR sb.sub_market = d.sub_market_key
+       )
     `).all({ tradeDay: day }).map((row) => ({
       stockCode: row.stockCode,
       tradeDay: row.tradeDay,

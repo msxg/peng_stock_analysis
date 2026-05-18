@@ -202,6 +202,7 @@ function createSchema(connection) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       market TEXT NOT NULL,
       sub_market TEXT,
+      security_type TEXT NOT NULL DEFAULT 'stock',
       code TEXT NOT NULL,
       name TEXT NOT NULL,
       sector TEXT,
@@ -1223,6 +1224,7 @@ function ensureMigrations(connection) {
   }
 
   const stockBasicsColumns = [
+    { name: 'security_type', sql: "TEXT NOT NULL DEFAULT 'stock'" },
     { name: 'industry', sql: 'TEXT' },
     { name: 'latest_price', sql: 'REAL' },
     { name: 'total_shares', sql: 'REAL' },
@@ -1243,6 +1245,16 @@ function ensureMigrations(connection) {
       connection.exec(`ALTER TABLE stock_basics ADD COLUMN ${column.name} ${column.sql}`);
     }
   });
+
+  if (hasColumn(connection, 'stock_basics', 'security_type')) {
+    connection.exec(`
+      UPDATE stock_basics
+      SET security_type = CASE
+        WHEN security_type IS NULL OR TRIM(security_type) = '' THEN 'stock'
+        ELSE LOWER(TRIM(security_type))
+      END
+    `);
+  }
 
   if (hasTable(connection, 'futures_categories') && !hasColumn(connection, 'futures_categories', 'is_enabled')) {
     connection.exec('ALTER TABLE futures_categories ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1');
